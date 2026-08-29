@@ -1,6 +1,6 @@
 ---
 name: tasks-plus
-description: Use when asked to work on or track a task in the Tasks Plus plugin, when the prompt mentions a task key such as ABC-12, or when work needs task comments, attachments, delegation tracking, or status updates.
+description: Tasks Plus is this user's issue tracker. Use when asked to work on or track a task, when the prompt mentions a task key such as ABC-12, when work needs task comments, attachments, delegation tracking, or status updates, and whenever another skill refers to "the issue tracker" — publishing or fetching an issue, spec, PRD, or ticket, breaking a plan into tickets, applying triage labels, or recording parent and blocked-by relationships.
 ---
 
 # Tasks
@@ -138,6 +138,54 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
    ```sh
    bb tasks-plus detach ABC-12 --thread thr_dead_predecessor
    ```
+
+## Blockers
+
+A task is blocked when it has an unresolved blocker — another task that is not
+yet `done` or `canceled`. Blocked is derived, never stored: closing or
+cancelling the blocker unblocks the dependent immediately, and there is no
+unblock action to perform.
+
+```sh
+bb tasks-plus blocker add ABC-12 ABC-9   # ABC-12 is blocked by ABC-9
+bb tasks-plus blocker rm ABC-12 ABC-9
+bb tasks-plus blocker list ABC-12        # both directions: blocked by, and blocking
+```
+
+Blocking is enforced, not advisory: a blocked task refuses
+`--status in_progress` and refuses `dispatch`. Cycles are rejected when the edge
+is written. Resolved blockers stay in the list — the list is the record of what
+held the task up.
+
+Blockers are orthogonal to `--parent`. A parent groups work; a blocker orders
+it. A task may be blocked by a task in another project.
+
+## Use as the project issue tracker
+
+Skills that speak of "the issue tracker", "publishing an issue", "fetching a
+ticket", or triage labels mean Tasks Plus — unless the repo carries its own
+`docs/agents/issue-tracker.md`, which wins where it exists.
+
+| The skill says | Do this |
+| --- | --- |
+| publish an issue, PRD, or spec | `bb tasks-plus create --title <title> --description-file <path>` |
+| fetch the ticket | `bb tasks-plus show <key>`, `--json` when it drives commands |
+| a **Parent** section referencing another ticket | pass `--parent <key>`; do not write the reference into the body |
+| a **Blocked by** section | run `bb tasks-plus blocker add <task> <blocker>`; do not write the reference into the body |
+| apply a triage label | `--label` on create, `--add-label` / `--remove-label` on update |
+| the issue number or URL | the task key, such as `ABC-12` |
+
+Create parents before children and blockers before dependents, so the key
+already exists when the next command references it. Capture a new key with
+`--json | jq -r '.task.key'`.
+
+### Triage labels
+
+The five triage roles are labels, not statuses: `needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`. Statuses track the work itself
+and drive blocker resolution, so never overload them with triage state. Create a
+missing label with `bb tasks-plus label create --project <prefix> --name <name>`
+before applying it.
 
 ## Link tasks in responses
 
