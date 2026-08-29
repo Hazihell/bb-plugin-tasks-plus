@@ -109,9 +109,57 @@ function LabelChips({
   );
 }
 
+/**
+ * The row's leading gutter. Always occupies the same width so every title
+ * lines up whether or not the row has subtasks; only a row that actually owns
+ * subtasks renders the chevron. Like the property editors it sits at z-10, or
+ * the stretched open overlay (inset-0) would swallow the click and navigate
+ * instead of toggling.
+ */
+function ExpandToggle({
+  task,
+  childCount,
+  expanded,
+  onToggle,
+}: {
+  task: Task;
+  childCount: number;
+  expanded: boolean;
+  onToggle?: () => void;
+}) {
+  if (childCount === 0 || onToggle === undefined) {
+    return (
+      <span aria-hidden className="col-start-1 row-start-1 size-4 shrink-0" />
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} ${
+        childCount === 1 ? "subtask" : "subtasks"
+      } of ${task.key}`}
+      onClick={onToggle}
+      className="relative z-10 col-start-1 row-start-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-subtle-foreground hover:bg-state-active focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      <Icon
+        name={expanded ? "ChevronDown" : "ChevronRight"}
+        className="size-3.5"
+      />
+    </button>
+  );
+}
+
 interface TaskRowProps {
   /** Task with any pending optimistic edit already applied. */
   task: Task;
+  /** How many subtasks this row owns. 0 renders no chevron. */
+  childCount?: number;
+  /** Whether this row's subtasks are currently shown beneath it. */
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
+  /** Opens the new-subtask dialog with this task pre-selected as parent. */
+  onNewSubtask?: () => void;
   meta: TaskRowMeta | undefined;
   project: Project | undefined;
   showProject: boolean;
@@ -134,6 +182,10 @@ interface TaskRowProps {
  */
 export function TaskRow({
   task,
+  childCount = 0,
+  expanded = false,
+  onToggleExpanded,
+  onNewSubtask,
   meta,
   project,
   showProject,
@@ -146,7 +198,12 @@ export function TaskRow({
   const [openMenu, setOpenMenu] = useState<"status" | "priority" | null>(null);
 
   return (
-    <TaskContextMenu task={task} onEdit={onEdit} projectLabels={projectLabels}>
+    <TaskContextMenu
+      task={task}
+      onEdit={onEdit}
+      projectLabels={projectLabels}
+      {...(onNewSubtask ? { onNewSubtask } : {})}
+    >
       <div
         data-task-key={task.key}
         aria-busy={pending || undefined}
@@ -156,11 +213,17 @@ export function TaskRow({
           // From @md up the same children lay out as the classic single flex
           // row (the grid placement classes are inert in flex), so desktop
           // keeps its exact 34px rows.
-          "relative grid w-full grid-cols-[auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 border-b border-border-hairline px-3.5 py-1.5 text-left transition-opacity hover:bg-state-hover",
+          "relative grid w-full grid-cols-[auto_auto_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1 border-b border-border-hairline px-3.5 py-1.5 text-left transition-opacity hover:bg-state-hover",
           "@md:flex @md:h-[34px] @md:py-0",
           pending && "opacity-70",
         )}
       >
+        <ExpandToggle
+          task={task}
+          childCount={childCount}
+          expanded={expanded}
+          {...(onToggleExpanded ? { onToggle: onToggleExpanded } : {})}
+        />
         <button
           type="button"
           aria-label={`Open ${task.key}: ${task.title}`}
@@ -183,9 +246,9 @@ export function TaskRow({
           onEdit={onEdit}
           open={openMenu === "priority"}
           onOpenChange={(next) => setOpenMenu(next ? "priority" : null)}
-          className="col-start-1 row-start-2"
+          className="col-start-2 row-start-2"
         />
-        <span className="col-start-2 row-start-2 min-w-0 truncate text-xs tabular-nums text-subtle-foreground @max-md:max-w-32 @md:w-14 @md:shrink-0">
+        <span className="col-start-3 row-start-2 min-w-0 truncate text-xs tabular-nums text-subtle-foreground @max-md:max-w-32 @md:w-14 @md:shrink-0">
           {task.key}
         </span>
         <StatusEditor
@@ -193,12 +256,21 @@ export function TaskRow({
           onEdit={onEdit}
           open={openMenu === "status"}
           onOpenChange={(next) => setOpenMenu(next ? "status" : null)}
-          className="col-start-1 row-start-1"
+          className="col-start-2 row-start-1"
         />
-        <span className="col-start-2 col-span-2 row-start-1 min-w-0 truncate text-sm @md:flex-1">
+        <span className="col-start-3 col-span-2 row-start-1 min-w-0 truncate text-sm @md:flex-1">
           {task.title}
         </span>
-        <span className="col-start-3 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
+        <span className="col-start-4 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
+          {childCount > 0 ? (
+            <span
+              title={`${childCount} ${childCount === 1 ? "subtask" : "subtasks"}`}
+              className={`${RAIL_CHIP_CLASS} shrink-0 tabular-nums`}
+            >
+              <Icon name="ListTodo" className="size-3 shrink-0" />
+              {childCount}
+            </span>
+          ) : null}
           {meta ? <ActiveChip threads={meta.activeThreads} /> : null}
           <LabelChips task={task} labelsById={labelsById} />
           {task.dueDate !== null ? (

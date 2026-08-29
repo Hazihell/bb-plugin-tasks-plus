@@ -274,11 +274,18 @@ export function TaskContextMenu({
   task,
   onEdit,
   projectLabels,
+  onNewSubtask,
   children,
 }: {
   task: Task;
   onEdit: EditFn;
   projectLabels: readonly Label[];
+  /**
+   * Opens the new-task dialog with this task as parent. Omitted where subtask
+   * creation isn't offered; suppressed anyway on a row that is already a
+   * subtask, since the API allows only one level of nesting.
+   */
+  onNewSubtask?: () => void;
   children: ReactNode;
 }) {
   const toggleLabel = (labelId: string) => {
@@ -410,6 +417,16 @@ export function TaskContextMenu({
               ))}
             </ContextMenuSubContent>
           </ContextMenuSub>
+        ) : null}
+
+        {onNewSubtask !== undefined && task.parentTaskId === null ? (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={onNewSubtask}>
+              <Icon name="Plus" className="size-3.5" />
+              <span>New subtask</span>
+            </ContextMenuItem>
+          </>
         ) : null}
       </ContextMenuContent>
     </ContextMenu>

@@ -1,56 +1,24 @@
 import { listAllTasks, useTasksQuery } from "../../shell/data.js";
-import type {
-  Label,
-  Task,
-  TaskPriority,
-  TaskStatus,
-  TaskThread,
-} from "../../shared/contract.js";
-
-interface ListTaskFilters {
-  statuses: readonly TaskStatus[];
-  priorities: readonly TaskPriority[];
-  /**
-   * `null` means no label filter. An array (including empty) is an active
-   * label filter: empty matches nothing once the catalog is known, which is
-   * how stale/deleted label names recover without silently showing all tasks.
-   */
-  labelIds: readonly string[] | null;
-}
+import type { Label, Task, TaskThread } from "../../shared/contract.js";
 
 /**
- * Server-side filtered task list. Subtasks are excluded (parentTaskId: null),
- * matching the design mock — they surface on their parent's detail page.
+ * Every task in scope — parents and subtasks together in one flat array, so
+ * the list can nest a subtask under its parent without a second query.
+ * Status/priority/label filtering is deliberately *not* a query param: those
+ * filters apply to parents only, and a matching parent must bring all of its
+ * children regardless of their own status. The view partitions and filters
+ * client-side; only `projectId` and `activeOnly` narrow the fetch, so changing
+ * a filter never refetches.
  */
-export function useListTasks(
-  projectId: string | null,
-  activeOnly: boolean,
-  filters: ListTaskFilters,
-) {
+export function useListTasks(projectId: string | null, activeOnly: boolean) {
   return useTasksQuery(
     async (rpc) =>
       listAllTasks(rpc, {
         ...(projectId === null ? {} : { projectId }),
-        ...(filters.statuses.length > 0
-          ? { statuses: [...filters.statuses] }
-          : {}),
-        ...(filters.priorities.length > 0
-          ? { priorities: [...filters.priorities] }
-          : {}),
-        ...(filters.labelIds !== null
-          ? { labelIds: [...filters.labelIds] }
-          : {}),
         activeOnly,
-        parentTaskId: null,
       }),
     ["tasks:changed", "threads:changed"],
-    [
-      projectId,
-      activeOnly,
-      filters.statuses.join(),
-      filters.priorities.join(),
-      filters.labelIds === null ? "" : `active:${filters.labelIds.join()}`,
-    ],
+    [projectId, activeOnly],
   );
 }
 

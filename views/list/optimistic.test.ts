@@ -58,17 +58,22 @@ describe("matchesFilters", () => {
   const t = task({ id: "T1", status: "in_progress", priority: "high", labelIds: ["A"] });
 
   it("passes with no filters", () => {
-    expect(matchesFilters(t, [], [], [])).toBe(true);
+    expect(matchesFilters(t, [], [], null)).toBe(true);
   });
 
   it("filters by status, priority, and label any-of", () => {
-    expect(matchesFilters(t, ["in_progress"], [], [])).toBe(true);
-    expect(matchesFilters(t, ["todo"], [], [])).toBe(false);
-    expect(matchesFilters(t, [], ["low"], [])).toBe(false);
+    expect(matchesFilters(t, ["in_progress"], [], null)).toBe(true);
+    expect(matchesFilters(t, ["todo"], [], null)).toBe(false);
+    expect(matchesFilters(t, [], ["low"], null)).toBe(false);
     // Label filter matches when the task carries any selected label id.
     expect(matchesFilters(t, [], [], ["A"])).toBe(true);
     expect(matchesFilters(t, [], [], ["B"])).toBe(false);
     expect(matchesFilters(t, [], [], ["B", "A"])).toBe(true);
+  });
+
+  it("matches nothing for an active filter that resolved to no label ids", () => {
+    // A remembered label name the catalog no longer knows.
+    expect(matchesFilters(t, [], [], [])).toBe(false);
   });
 });
 

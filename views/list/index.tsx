@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Label } from "../../shared/contract.js";
+import type { Label, Task } from "../../shared/contract.js";
 import { useProjects } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/new-task-dialog.js";
@@ -21,7 +21,6 @@ import {
   storeListPreference,
   type ListPreference,
 } from "./list-preference.js";
-import { sortTasks } from "../../shared/sort.js";
 import type { TaskSort } from "../../shared/pagination.js";
 import { StatusIcon } from "./icons.js";
 import {
@@ -35,6 +34,7 @@ import {
   STATUS_LABELS,
 } from "./lib.js";
 import { editedTasks, matchesFilters } from "./optimistic.js";
+import { partitionTasks } from "./tree.js";
 import { useListTaskEdits } from "./use-task-edits.js";
 import { TaskRow } from "./row.js";
 
@@ -123,6 +123,21 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     });
   };
   const [newTaskOpen, setNewTaskOpen] = useState(false);
+  // Parent whose "New subtask" menu item was chosen; drives the second dialog.
+  const [subtaskParent, setSubtaskParent] = useState<Task | null>(null);
+  // Which parents are currently showing their subtasks. Collapsed by default,
+  // and deliberately ordinary component state: expansion is a momentary
+  // reading posture, not part of the persisted list preference.
+  const [expandedParents, setExpandedParents] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const toggleExpanded = (taskId: string) => {
+    setExpandedParents((current) => {
+      const next = new Set(current);
+      if (!next.delete(taskId)) next.add(taskId);
+      return next;
+    });
+  };
 
   const labelProjectIds = useMemo(
     () =>
@@ -137,7 +152,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     [labels.data],
   );
   // null = no label filter. Once the catalog is loaded, unresolved selected
-  // names become an active empty id list so the query matches nothing (not
+  // names become an active empty id list so the filter matches nothing (not
   // every task). While labels are still loading, defer the filter to avoid a
   // flash of empty results before options arrive.
   const labelIds = useMemo((): readonly string[] | null => {
@@ -146,11 +161,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     return selectedLabelIds(labelOptions, filters.labelNames);
   }, [filters.labelNames, labelOptions, labels.data]);
 
-  const tasksQuery = useListTasks(projectId, activeOnly, {
-    statuses: filters.statuses,
-    priorities: filters.priorities,
-    labelIds,
-  });
+  const tasksQuery = useListTasks(projectId, activeOnly);
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) => push(message));
 
@@ -173,31 +184,26 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     [projects.data],
   );
 
-  // Optimistic edits are overlaid before sorting/grouping so an edited row jumps
-  // to its new status group immediately, and the active status/priority/label
-  // filters are re-applied so a row that no longer matches drops out at once
-  // instead of waiting for the server refetch.
-  const displayTasks = useMemo(() => {
+  // Optimistic edits are overlaid on the flat list, before it is split into
+  // parents and subtasks, so an edited row — either kind — moves to its new
+  // status group or its new slot inside a parent's block immediately instead
+  // of waiting for the server refetch.
+  const editedList = useMemo(() => {
     if (tasksQuery.data === undefined) return undefined;
-    return editedTasks(tasksQuery.data, edits.entries).filter((task) =>
-      matchesFilters(
-        task,
-        filters.statuses,
-        filters.priorities,
-        labelIds ?? [],
+    return editedTasks(tasksQuery.data, edits.entries);
+  }, [tasksQuery.data, edits.entries]);
+  // The status/priority/label filters are a claim about parents only: a
+  // matching parent brings every one of its subtasks whatever their own
+  // values, and a subtask never renders without its parent. So every count the
+  // chrome shows — the filter bar's and each status header's — counts parents.
+  const tree = useMemo(
+    () =>
+      partitionTasks(editedList ?? [], sort, (task) =>
+        matchesFilters(task, filters.statuses, filters.priorities, labelIds),
       ),
-    );
-  }, [
-    tasksQuery.data,
-    edits.entries,
-    filters.statuses,
-    filters.priorities,
-    labelIds,
-  ]);
-  const groups = useMemo(
-    () => groupTasksByStatus(sortTasks(displayTasks ?? [], sort)),
-    [displayTasks, sort],
+    [editedList, sort, filters.statuses, filters.priorities, labelIds],
   );
+  const groups = useMemo(() => groupTasksByStatus(tree.parents), [tree.parents]);
 
   const showProject = projectId === null;
   const filtered = hasActiveFilters(filters);
@@ -245,11 +251,24 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     revision: tasksQuery.data?.length ?? 0,
   });
 
+  /** Row props that read the same for a parent and for one of its subtasks. */
+  const rowProps = (task: Task) => ({
+    task,
+    meta: meta.data?.get(task.id),
+    project: projectsById.get(task.projectId),
+    showProject,
+    labelsById,
+    projectLabels: labelsByProject.get(task.projectId) ?? [],
+    onEdit: edits.edit,
+    onOpen: () => navigation.go({ kind: "task", taskKey: task.key }),
+    pending: edits.pending.has(task.id),
+  });
+
   let body: React.ReactNode;
   if (
     routeScopeChanged ||
     tasksQuery.data === undefined ||
-    displayTasks === undefined
+    editedList === undefined
   ) {
     // While a changed route scope is in flight, any held data or error is the
     // previous route's; only a settled result may claim this scope is empty
@@ -264,7 +283,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
       ) : (
         <LoadingRows />
       );
-  } else if (displayTasks.length === 0) {
+  } else if (tree.parents.length === 0) {
     if (filtered) {
       body = (
         <EmptyState
@@ -328,20 +347,32 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
             {group.tasks.length}
           </span>
         </div>
-        {group.tasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            meta={meta.data?.get(task.id)}
-            project={projectsById.get(task.projectId)}
-            showProject={showProject}
-            labelsById={labelsById}
-            projectLabels={labelsByProject.get(task.projectId) ?? []}
-            onEdit={edits.edit}
-            onOpen={() => navigation.go({ kind: "task", taskKey: task.key })}
-            pending={edits.pending.has(task.id)}
-          />
-        ))}
+        {group.tasks.map((task) => {
+          const children = tree.childrenByParent.get(task.id) ?? [];
+          const expanded = expandedParents.has(task.id);
+          return (
+            <div key={task.id}>
+              <TaskRow
+                {...rowProps(task)}
+                childCount={children.length}
+                expanded={expanded}
+                onToggleExpanded={() => toggleExpanded(task.id)}
+                onNewSubtask={() => setSubtaskParent(task)}
+              />
+              {expanded && children.length > 0 ? (
+                /* Subtasks live in their parent's group whatever their own
+                   status, so the nested block is indented behind a hairline
+                   rail: the cue that the header above it counts and claims
+                   parents only. Same token family as the row dividers. */
+                <div className="ml-3.5 border-l border-border-hairline pl-3">
+                  {children.map((child) => (
+                    <TaskRow key={child.id} {...rowProps(child)} />
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </section>
     ));
   }
@@ -354,7 +385,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         sort={sort}
         onSortChange={setSort}
         labelOptions={labelOptions}
-        taskCount={displayTasks?.length}
+        taskCount={editedList === undefined ? undefined : tree.parents.length}
       />
       <div
         ref={scrollRef}
@@ -367,6 +398,18 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         onOpenChange={setNewTaskOpen}
         projectId={projectId}
       />
+      {/* Separate instance so the subtask draft is seeded from its parent —
+          the dialog reads `defaultParentTaskId` when it opens. */}
+      {subtaskParent !== null ? (
+        <NewTaskDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setSubtaskParent(null);
+          }}
+          projectId={subtaskParent.projectId}
+          defaultParentTaskId={subtaskParent.id}
+        />
+      ) : null}
       <DetailToasts toasts={toasts} onDismiss={dismiss} />
     </div>
   );

@@ -88,23 +88,23 @@ export function editedTasks(
 }
 
 /**
- * Re-applies the active filters that an inline edit can invalidate — status,
- * priority, and labels. Labels use the server's any-of semantics (a task
- * matches if it carries at least one selected label id), so an optimistically
- * changed row that no longer matches drops out immediately instead of lingering
- * until the server refetch removes it.
+ * The list's whole status/priority/label filter, applied client-side. Labels
+ * keep the server's any-of semantics (a task matches if it carries at least
+ * one selected label id). `labelIds` distinguishes "no label filter" (`null`)
+ * from an active filter that resolved to no ids (`[]`, which matches nothing)
+ * — that is how a stale or deleted label name filters everything out instead
+ * of silently showing every task.
  */
 export function matchesFilters(
   task: Task,
   statuses: readonly TaskStatus[],
   priorities: readonly TaskPriority[],
-  labelIds: readonly string[],
+  labelIds: readonly string[] | null,
 ): boolean {
   return (
     (statuses.length === 0 || statuses.includes(task.status)) &&
     (priorities.length === 0 || priorities.includes(task.priority)) &&
-    (labelIds.length === 0 ||
-      task.labelIds.some((id) => labelIds.includes(id)))
+    (labelIds === null || task.labelIds.some((id) => labelIds.includes(id)))
   );
 }
 

@@ -396,7 +396,7 @@ describe("list filter/sort preference persistence", () => {
     ).not.toContain("Priority");
   });
 
-  it("persists priority and label filters and sends resolved label ids", async () => {
+  it("persists priority and label filters and resolves label names client-side", async () => {
     const registration = app.navPanels[0]!;
     const rpc = baseRpc();
     const slot = renderSlot(registration, { subPath: PROJECT_A }, { rpc });
@@ -424,20 +424,22 @@ describe("list filter/sort preference persistence", () => {
       ]);
     });
 
+    // Filters are applied client-side now, so they never reach the query: the
+    // fetch stays scoped to the project alone.
+    expect(
+      rpc.listTasksCalls.every(
+        (call) =>
+          typeof call === "object" &&
+          call !== null &&
+          (call as { labelIds?: unknown }).labelIds === undefined &&
+          (call as { priorities?: unknown }).priorities === undefined,
+      ),
+    ).toBe(true);
+    // Urgent AND Bug: ALP-1 carries Bug but isn't urgent, ALP-2 is urgent but
+    // carries UX, so the intersection is empty.
     await waitFor(() => {
-      const withLabels = rpc.listTasksCalls.filter(
-        (call): call is { labelIds?: string[]; priorities?: string[] } =>
-          typeof call === "object" && call !== null,
-      );
-      expect(
-        withLabels.some(
-          (call) =>
-            Array.isArray(call.labelIds) &&
-            call.labelIds.includes(LABEL_BUG) &&
-            Array.isArray(call.priorities) &&
-            call.priorities.includes("urgent"),
-        ),
-      ).toBe(true);
+      expect(slot.queryByText("ALP-1")).toBeNull();
+      expect(slot.queryByText("ALP-2")).toBeNull();
     });
 
     slot.lifecycle.unmount();
@@ -478,18 +480,8 @@ describe("list filter/sort preference persistence", () => {
     expect(slot.getByRole("button", { name: /^Label/ }).textContent).toContain(
       "DeletedLabel",
     );
-    await waitFor(() => {
-      expect(
-        rpc.listTasksCalls.some(
-          (call) =>
-            typeof call === "object" &&
-            call !== null &&
-            Array.isArray((call as { labelIds?: unknown }).labelIds) &&
-            (call as { labelIds: unknown[] }).labelIds.length === 0,
-        ),
-      ).toBe(true);
-    });
-    // Empty labelIds filter yields no rows (not the full unfiltered list).
+    // A selected name that resolves to no label id filters everything out
+    // rather than falling back to the full unfiltered list.
     await waitFor(() => {
       expect(slot.queryByText("ALP-1")).toBeNull();
       expect(slot.queryByText("ALP-2")).toBeNull();
