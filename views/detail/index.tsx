@@ -14,6 +14,7 @@ import { useTasksNavigation } from "../../shell/routes.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
 import { TaskActivity } from "../activity/task-activity.js";
 import { AttachmentsGrid, uploadAttachment } from "./attachments.js";
+import { BlockersSection } from "./blockers.js";
 import {
   createDescriptionSaver,
   type DescriptionSaver,
@@ -473,6 +474,8 @@ function TaskDetail({ task }: { task: Task }) {
             subtasks={subtasks.data ?? []}
             onCreate={createSubtask}
           />
+
+          <BlockersSection task={task} onError={(message) => push(message)} />
 
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}

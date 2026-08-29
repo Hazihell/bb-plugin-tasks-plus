@@ -20,6 +20,7 @@ import {
   isActiveThread,
 } from "./meta.js";
 import {
+  blockedLabel,
   DUE_DATE_PRESETS,
   localIsoDate,
   PRIORITY_LABELS,
@@ -95,6 +96,11 @@ function StatusMenu({
   onUpdate: (update: TaskPropertyUpdate) => void;
   triggerClassName: string;
 }) {
+  // The API refuses to move a blocked task into progress; the menu carries
+  // that refusal in advance rather than letting the user find the wall.
+  const unavailableReason = task.blocked
+    ? blockedLabel(task.unresolvedBlockerCount)
+    : null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -104,18 +110,30 @@ function StatusMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
-        {TASK_STATUSES.map((status) => (
-          <DropdownMenuItem
-            key={status}
-            onSelect={() => onUpdate({ status })}
-          >
-            <StatusIcon status={status} />
-            {STATUS_LABELS[status]}
-            {status === task.status ? (
-              <Icon name="Check" className="ml-auto size-3.5" />
-            ) : null}
-          </DropdownMenuItem>
-        ))}
+        {TASK_STATUSES.map((status) => {
+          const blocked =
+            unavailableReason !== null && status === "in_progress";
+          return (
+            <DropdownMenuItem
+              key={status}
+              disabled={blocked}
+              onSelect={() => {
+                if (!blocked) onUpdate({ status });
+              }}
+            >
+              <StatusIcon status={status} />
+              {STATUS_LABELS[status]}
+              {blocked ? (
+                <span className="text-2xs text-subtle-foreground">
+                  {unavailableReason}
+                </span>
+              ) : null}
+              {status === task.status ? (
+                <Icon name="Check" className="ml-auto size-3.5" />
+              ) : null}
+            </DropdownMenuItem>
+          );
+        })}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -63,6 +63,8 @@ function task(overrides: Partial<Task> & Pick<Task, "id" | "number">): Task {
     position: overrides.number,
     createdAt: "2026-07-15T00:00:00.000Z",
     updatedAt: "2026-07-15T00:00:00.000Z",
+    blocked: false,
+    unresolvedBlockerCount: 0,
     labelIds: [],
     ...overrides,
   };
@@ -224,6 +226,68 @@ describe("inline row editing", () => {
     );
 
     await waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
+    expect(slot.rpcCalls.some((call) => call.method === "updateTask")).toBe(
+      false,
+    );
+  });
+});
+
+describe("blocked rows", () => {
+  it("shows the blocker count and dims the title", async () => {
+    const slot = renderList([
+      task({
+        id: "01HZT1",
+        number: 1,
+        blocked: true,
+        unresolvedBlockerCount: 2,
+      }),
+    ]);
+    const row = await rowFor(slot, "TSK-1");
+
+    within(row).getByLabelText("Blocked by 2 unresolved tasks");
+    // Dimmed by its own colour, not by the row's in-flight `pending` opacity.
+    expect(within(row).getByText("Task 1").className).toContain(
+      "text-muted-foreground",
+    );
+    expect(row.className).not.toContain("opacity-70");
+  });
+
+  it("leaves an unblocked row untouched", async () => {
+    const slot = renderList([task({ id: "01HZT1", number: 1 })]);
+    const row = await rowFor(slot, "TSK-1");
+
+    expect(within(row).queryByLabelText(/^Blocked by/)).toBeNull();
+    expect(within(row).getByText("Task 1").className).not.toContain(
+      "text-muted-foreground",
+    );
+  });
+
+  it("offers In Progress as unavailable rather than hiding it", async () => {
+    const slot = renderList([
+      task({
+        id: "01HZT1",
+        number: 1,
+        blocked: true,
+        unresolvedBlockerCount: 1,
+      }),
+    ]);
+    const row = await rowFor(slot, "TSK-1");
+
+    fireEvent.click(
+      within(row).getByRole("button", {
+        name: /Change status, currently Todo/,
+      }),
+    );
+    const drawer = await slot.findByRole("dialog", { name: "Change status" });
+    const item = await within(drawer).findByRole("menuitem", {
+      name: /In Progress/,
+    });
+    // The reason travels in the accessible name, not only a tooltip.
+    expect(item.getAttribute("aria-label")).toBeNull();
+    expect(item.textContent).toContain("Blocked by 1 unresolved task");
+    expect(item).toHaveProperty("disabled", true);
+
+    fireEvent.click(item);
     expect(slot.rpcCalls.some((call) => call.method === "updateTask")).toBe(
       false,
     );

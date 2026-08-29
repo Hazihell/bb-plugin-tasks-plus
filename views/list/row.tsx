@@ -8,7 +8,12 @@ import type {
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 import type { TaskRowMeta } from "./data.js";
-import { activeWorkLabel, formatDueDate, partitionLabels } from "./lib.js";
+import {
+  activeWorkLabel,
+  blockedLabel,
+  formatDueDate,
+  partitionLabels,
+} from "./lib.js";
 import type { EditFn } from "./property-menus.js";
 import {
   isBareKey,
@@ -40,6 +45,27 @@ function ActiveChip({ threads }: { threads: readonly TaskThread[] }) {
         className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
       />
       Active
+    </span>
+  );
+}
+
+/**
+ * Blocked chip: a lock plus the count of blockers still unresolved. Both
+ * facts ride on every task the list already fetched, so a row knows it is
+ * blocked without a second call. Rendered first in the rail and `shrink-0`,
+ * so the narrow two-line layout truncates label chips before it clips this.
+ */
+function BlockedChip({ task }: { task: Task }) {
+  if (!task.blocked) return null;
+  const label = blockedLabel(task.unresolvedBlockerCount);
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`${RAIL_CHIP_CLASS} shrink-0 tabular-nums`}
+    >
+      <Icon name="Lock" aria-hidden className="size-3 shrink-0" />
+      {task.unresolvedBlockerCount}
     </span>
   );
 }
@@ -266,10 +292,18 @@ export function TaskRow({
           onOpenChange={(next) => setOpenMenu(next ? "status" : null)}
           className="col-start-2 row-start-1"
         />
-        <span className="col-start-3 col-span-2 row-start-1 min-w-0 truncate text-sm @md:flex-1">
+        {/* Dimming is the title's own colour, deliberately not the row's
+            `pending` opacity: that one means an edit is still in flight. */}
+        <span
+          className={cn(
+            "col-start-3 col-span-2 row-start-1 min-w-0 truncate text-sm @md:flex-1",
+            task.blocked && "text-muted-foreground",
+          )}
+        >
           {task.title}
         </span>
         <span className="col-start-4 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
+          <BlockedChip task={task} />
           {expansion ? (
             <span
               title={subtaskCount(expansion.childCount)}

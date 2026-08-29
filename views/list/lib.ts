@@ -153,3 +153,19 @@ export const DUE_DATE_PRESETS: readonly [label: string, days: number][] = [
   ["Tomorrow", 1],
   ["Next week", 7],
 ];
+
+/**
+ * Accessible name and tooltip for anything that reports a task as blocked —
+ * the row's rail chip, the disabled "In Progress" menu item. `blocked` is
+ * derived server-side, so the unresolved count is the whole reason: nothing
+ * in the UI ever writes or infers it.
+ */
+export function blockedLabel(unresolvedBlockerCount: number): string {
+  const noun = unresolvedBlockerCount === 1 ? "task" : "tasks";
+  return `Blocked by ${unresolvedBlockerCount} unresolved ${noun}`;
+}
+
+/** A blocker stops counting once it is done or canceled. */
+export function isBlockerResolved(status: TaskStatus): boolean {
+  return status === "done" || status === "canceled";
+}
