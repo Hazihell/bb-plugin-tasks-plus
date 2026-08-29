@@ -6,6 +6,7 @@ import {
   type TaskStatus,
 } from "../../shared/contract.js";
 import type { TaskSort } from "../../shared/pagination.js";
+export { isBlockerResolved } from "../../shared/blockers.js";
 
 export const STATUS_LABELS: Record<TaskStatus, string> = {
   backlog: "Backlog",
@@ -165,7 +166,27 @@ export function blockedLabel(unresolvedBlockerCount: number): string {
   return `Blocked by ${unresolvedBlockerCount} unresolved ${noun}`;
 }
 
-/** A blocker stops counting once it is done or canceled. */
-export function isBlockerResolved(status: TaskStatus): boolean {
-  return status === "done" || status === "canceled";
+/**
+ * Why a status cannot be chosen for this task, or null when it can. The API
+ * refuses to move a blocked task into progress; every status picker —
+ * keyboard, dropdown, context menu — reads the refusal from here so none of
+ * them can offer a choice the server will reject.
+ */
+export function statusUnavailableReason(
+  task: Pick<Task, "blocked" | "unresolvedBlockerCount">,
+  status: TaskStatus,
+): string | null {
+  if (!task.blocked || status !== "in_progress") return null;
+  return blockedLabel(task.unresolvedBlockerCount);
+}
+
+/**
+ * Why an agent cannot be dispatched to this task, or null when it can. Same
+ * refusal as `statusUnavailableReason`, which is not a coincidence: an agent
+ * dispatch moves the task into progress.
+ */
+export function dispatchUnavailableReason(
+  task: Pick<Task, "blocked" | "unresolvedBlockerCount">,
+): string | null {
+  return statusUnavailableReason(task, "in_progress");
 }

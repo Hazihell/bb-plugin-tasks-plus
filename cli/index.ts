@@ -36,6 +36,7 @@ import {
   TASKS_PAGE_DEFAULT_LIMIT,
   TASKS_PAGE_MAX_LIMIT,
 } from "../shared/pagination";
+import { isBlockerResolved } from "../shared/blockers";
 import {
   assertAllowed,
   CliError,
@@ -428,10 +429,6 @@ async function listAllTasks(
   return tasks;
 }
 
-function blockerIsResolved(blocker: Pick<TaskBlocker, "status">): boolean {
-  return blocker.status === "done" || blocker.status === "canceled";
-}
-
 function blockerProjectName(
   blocker: Pick<TaskBlocker, "projectId">,
   projectsById: ReadonlyMap<string, Project>,
@@ -449,7 +446,7 @@ function renderBlockerTable(
     ["KEY", "STATE", "STATUS", "PROJECT", "TITLE"],
     blockers.map((blocker) => [
       blocker.key,
-      blockerIsResolved(blocker) ? "RESOLVED" : "UNRESOLVED",
+      isBlockerResolved(blocker.status) ? "RESOLVED" : "UNRESOLVED",
       blocker.status,
       blockerProjectName(blocker, projectsById),
       blocker.title,

@@ -7,6 +7,7 @@ import {
 import type { DelegationRpcContract } from "../../delegate/contract.js";
 import type {
   Preset,
+  Task,
   TaskPullRequest,
   TaskThread,
 } from "../../shared/contract.js";
@@ -19,6 +20,7 @@ import {
 import { PresetDialog, savePresetDraft } from "../manage/preset-dialog.js";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 import { useTasksRpc } from "../../shell/data.js";
+import { dispatchUnavailableReason } from "../list/lib.js";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -153,7 +155,7 @@ function storeLastPresetId(presetId: string): void {
 }
 
 interface DispatchControlProps {
-  taskId: string;
+  task: Task;
   presets: Preset[] | undefined;
   onError: (message: string) => void;
   align?: "start" | "end";
@@ -169,10 +171,13 @@ interface DispatchControlProps {
  * segment opens the preset menu, which also updates the remembered choice.
  * The label is just the preset name — the dropdown's "Dispatch with preset"
  * header carries the verb. With zero presets it collapses to an
- * "Add a preset…" button opening the preset dialog in create mode.
+ * "Add a preset…" button opening the preset dialog in create mode. A blocked
+ * task reads as undispatchable before the click — the delegate path would
+ * refuse it — with the reason inside the button so it carries into the
+ * accessible name, exactly as the status menus disable "In Progress".
  */
 export function DispatchControl({
-  taskId,
+  task,
   presets,
   onError,
   align = "end",
@@ -185,10 +190,12 @@ export function DispatchControl({
   // Keyed remount resets the create dialog's draft per open.
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
 
+  const unavailableReason = dispatchUnavailableReason(task);
+
   const dispatch = async (presetId: string) => {
     setDispatching(true);
     try {
-      await rpc.call("delegate", { taskId, presetId });
+      await rpc.call("delegate", { taskId: task.id, presetId });
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -245,21 +252,29 @@ export function DispatchControl({
       <div className={cn("flex min-w-0", className)}>
         <Button
           size="sm"
-          disabled={dispatching || !current}
+          disabled={dispatching || !current || unavailableReason !== null}
           className={cn(
             "h-7 min-w-0 flex-1 gap-1.5 rounded-r-none",
             primarySegment,
           )}
           onClick={() => {
-            if (current) pickPreset(current);
+            if (current && unavailableReason === null) pickPreset(current);
           }}
         >
           <span className="truncate">
             {dispatching ? "Dispatching…" : (current?.name ?? "Dispatch")}
           </span>
+          {unavailableReason !== null ? (
+            <span className="min-w-0 truncate text-2xs opacity-80">
+              {unavailableReason}
+            </span>
+          ) : null}
         </Button>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild disabled={dispatching || !current}>
+          <DropdownMenuTrigger
+            asChild
+            disabled={dispatching || !current || unavailableReason !== null}
+          >
             <Button
               size="sm"
               aria-label="Choose dispatch preset"

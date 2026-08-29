@@ -20,11 +20,11 @@ import {
   isActiveThread,
 } from "./meta.js";
 import {
-  blockedLabel,
   DUE_DATE_PRESETS,
   localIsoDate,
   PRIORITY_LABELS,
   STATUS_LABELS,
+  statusUnavailableReason,
 } from "../list/lib.js";
 import { DispatchControl } from "./threads.js";
 import { DEFAULT_COLOR } from "../manage/shared.js";
@@ -98,9 +98,6 @@ function StatusMenu({
 }) {
   // The API refuses to move a blocked task into progress; the menu carries
   // that refusal in advance rather than letting the user find the wall.
-  const unavailableReason = task.blocked
-    ? blockedLabel(task.unresolvedBlockerCount)
-    : null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -111,19 +108,18 @@ function StatusMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         {TASK_STATUSES.map((status) => {
-          const blocked =
-            unavailableReason !== null && status === "in_progress";
+          const unavailableReason = statusUnavailableReason(task, status);
           return (
             <DropdownMenuItem
               key={status}
-              disabled={blocked}
+              disabled={unavailableReason !== null}
               onSelect={() => {
-                if (!blocked) onUpdate({ status });
+                if (unavailableReason === null) onUpdate({ status });
               }}
             >
               <StatusIcon status={status} />
               {STATUS_LABELS[status]}
-              {blocked ? (
+              {unavailableReason !== null ? (
                 <span className="text-2xs text-subtle-foreground">
                   {unavailableReason}
                 </span>
@@ -546,7 +542,7 @@ export function PropertiesRail({
 
       <div className="mt-2.5 py-0.5">
         <DispatchControl
-          taskId={task.id}
+          task={task}
           presets={presets}
           onError={onError}
           align="start"
@@ -621,7 +617,7 @@ export function InlineProperties({
         </button>
       </LabelsMenu>
       <DispatchControl
-        taskId={task.id}
+        task={task}
         presets={presets}
         onError={onError}
         className="ml-auto max-w-56"

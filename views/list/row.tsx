@@ -52,8 +52,9 @@ function ActiveChip({ threads }: { threads: readonly TaskThread[] }) {
 /**
  * Blocked chip: a lock plus the count of blockers still unresolved. Both
  * facts ride on every task the list already fetched, so a row knows it is
- * blocked without a second call. Rendered first in the rail and `shrink-0`,
- * so the narrow two-line layout truncates label chips before it clips this.
+ * blocked without a second call. Rendered first in the rail and `shrink-0`
+ * on purpose: when the narrow two-line layout runs out of room, label chips
+ * truncate and this one survives — blocked outranks every other chip.
  */
 function BlockedChip({ task }: { task: Task }) {
   if (!task.blocked) return null;

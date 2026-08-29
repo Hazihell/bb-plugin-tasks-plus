@@ -212,11 +212,6 @@ export interface ListTasksPage {
   nextCursor: string | null;
 }
 
-export interface AddTaskBlockerInput {
-  blockerTaskId: string;
-  blockedTaskId: string;
-}
-
 export interface UpdateTaskPositionInput {
   status: TaskStatus;
   /** The task immediately before this task in the destination column. */

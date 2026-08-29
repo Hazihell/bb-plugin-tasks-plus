@@ -14,6 +14,7 @@ import {
 } from "../attachments";
 import { deliverCommentToLatestAgent } from "../steer";
 import { isSideChatShapedThread } from "../shared/side-chat";
+import { isBlockerResolved } from "../shared/blockers";
 import {
   tasksRpcContract,
   type Attachment as AttachmentMetadata,
@@ -232,10 +233,7 @@ function unresolvedBlockers(
 ): ReturnType<TasksStore["listTaskBlockers"]> {
   return store.tasks
     .listTaskBlockers(taskId)
-    .filter(
-      (blocker) =>
-        blocker.status !== "done" && blocker.status !== "canceled",
-    );
+    .filter((blocker) => !isBlockerResolved(blocker.status));
 }
 
 function taskBlockedMessage(
@@ -950,13 +948,12 @@ export function registerHandlers(
       return { removed };
     },
     listTaskBlockers(input) {
-      const blockers = store.tasks.listTaskBlockers(input.taskId);
+      // The count is already derived on the task row; recomputing it here
+      // would be a second place for the resolved rule to live.
+      const task = store.tasks.getTask(input.taskId);
       return {
-        blockers,
-        unresolvedCount: blockers.filter(
-          (blocker) =>
-            blocker.status !== "done" && blocker.status !== "canceled",
-        ).length,
+        blockers: store.tasks.listTaskBlockers(input.taskId),
+        unresolvedCount: task?.unresolvedBlockerCount ?? 0,
       };
     },
     listTaskBlocking(input) {

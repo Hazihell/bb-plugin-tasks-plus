@@ -94,6 +94,23 @@ function blocker(
   };
 }
 
+/** One dispatch preset, so the split button renders instead of "Add a preset…". */
+const preset = {
+  id: "01HZZZZZZZZZZZZZZZZZZZZZE1",
+  name: "FB3 BE live worktree",
+  providerId: "claude-code",
+  modelId: "claude-sonnet-5",
+  reasoningLevel: "medium",
+  serviceTier: null,
+  permissionMode: "accept-edits",
+  environmentKind: "new-worktree",
+  baseBranch: "main",
+  machineId: "mach_1",
+  instructions: "",
+  builtin: false,
+  createdAt: "2026-07-15T00:00:00.000Z",
+};
+
 const subject = task(5, {
   title: "Ship the rail",
   blocked: true,
@@ -203,7 +220,10 @@ describe("task blockers section", () => {
   });
 
   it("adds a blocker picked from any project", async () => {
-    const added: Array<Record<string, unknown>> = [];
+    // A mock whose data actually changes: the add lands in the same list the
+    // section reads back, so the assertion is the row appearing, not the
+    // payload that was sent.
+    const stored: Array<Record<string, unknown>> = [];
     const slot = renderDetail({
       listTasks: (input: Record<string, unknown> | null) =>
         input?.parentTaskId
@@ -220,8 +240,19 @@ describe("task blockers section", () => {
               ],
               nextCursor: null,
             },
+      listTaskBlockers: () => ({
+        blockers: [...stored],
+        unresolvedCount: stored.length,
+      }),
       addTaskBlocker: (input: Record<string, unknown>) => {
-        added.push(input);
+        stored.push(
+          blocker(2, {
+            id: input.blockerTaskId,
+            key: "PLT-2",
+            title: "Cross-project prep",
+            projectId: OTHER_PROJECT_ID,
+          }),
+        );
         return {
           ok: true,
           relation: {
@@ -234,13 +265,13 @@ describe("task blockers section", () => {
     });
 
     fireEvent.click(await slot.findByRole("button", { name: "Add blocker" }));
+    expect(slot.queryByRole("button", { name: "Remove blocker PLT-2" })).toBe(
+      null,
+    );
     fireEvent.click(await slot.findByText("Cross-project prep"));
 
-    await waitFor(() => expect(added).toHaveLength(1));
-    expect(added[0]).toEqual({
-      blockerTaskId: "01HZZZZZZZZZZZZZZZZZZZZO2",
-      blockedTaskId: subject.id,
-    });
+    await slot.findByRole("button", { name: "Remove blocker PLT-2" });
+    expect(stored[0]).toMatchObject({ id: "01HZZZZZZZZZZZZZZZZZZZZO2" });
   });
 
   it("keeps a rejected cycle readable on the picker", async () => {
@@ -269,14 +300,18 @@ describe("task blockers section", () => {
   });
 
   it("removes a blocker", async () => {
-    const removed: Array<Record<string, unknown>> = [];
+    const stored = [blocker(9, { title: "Land the migration" })];
     const slot = renderDetail({
       listTaskBlockers: () => ({
-        blockers: [blocker(9, { title: "Land the migration" })],
-        unresolvedCount: 1,
+        blockers: [...stored],
+        unresolvedCount: stored.length,
       }),
       removeTaskBlocker: (input: Record<string, unknown>) => {
-        removed.push(input);
+        const index = stored.findIndex(
+          (entry) => entry.id === input.blockerTaskId,
+        );
+        if (index === -1) return { removed: false };
+        stored.splice(index, 1);
         return { removed: true };
       },
     });
@@ -285,11 +320,10 @@ describe("task blockers section", () => {
       await slot.findByRole("button", { name: "Remove blocker TSK-9" }),
     );
 
-    await waitFor(() => expect(removed).toHaveLength(1));
-    expect(removed[0]).toEqual({
-      blockerTaskId: "01HZZZZZZZZZZZZZZZZZZZZT9",
-      blockedTaskId: subject.id,
-    });
+    // The row goes because the list behind it changed, not because the click
+    // was recorded.
+    await waitFor(() => expect(slot.queryByText("Land the migration")).toBe(null));
+    expect(stored).toEqual([]);
   });
 
   it("reads In Progress as unavailable in the rail's status menu", async () => {
@@ -304,5 +338,16 @@ describe("task blockers section", () => {
     }))[0]!;
     expect(item.textContent).toContain("Blocked by 1 unresolved task");
     expect(item.getAttribute("data-disabled")).not.toBeNull();
+  });
+
+  it("reads dispatch as unavailable while the task is blocked", async () => {
+    const slot = renderDetail({ listPresets: () => ({ presets: [preset] }) });
+
+    // Same reading as the status menu: disabled, with the reason as visible
+    // text inside the control so it lands in the accessible name.
+    const buttons = await slot.findAllByRole("button", {
+      name: /Blocked by 1 unresolved task/,
+    });
+    expect((buttons[0] as HTMLButtonElement).disabled).toBe(true);
   });
 });

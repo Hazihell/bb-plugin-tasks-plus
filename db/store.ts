@@ -12,8 +12,8 @@ import {
   presetReasoningLevelSchema,
   presetServiceTierSchema,
 } from "../shared/contract.js";
+import { RESOLVED_BLOCKER_STATUSES } from "../shared/blockers.js";
 import type {
-  AddTaskBlockerInput,
   AddTaskBlockerResult,
   Attachment,
   Comment,
@@ -35,6 +35,7 @@ import type {
   SubtaskDoneCounts,
   Task,
   TaskBlocker,
+  TaskBlockerRelation,
   TaskLabel,
   TaskThread,
   TaskThreadLiveStatus,
@@ -58,6 +59,14 @@ const MIN_POSITION_GAP = 0.000_001;
 const PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+/**
+ * The SQL half of `isBlockerResolved` (shared/blockers.ts): the predicate
+ * cannot cross into a query, so both sides read the same status list and the
+ * two cannot drift apart.
+ */
+const RESOLVED_BLOCKER_STATUS_SQL = RESOLVED_BLOCKER_STATUSES.map(
+  (status) => `'${status}'`,
+).join(", ");
 
 export class TaskBlockerCycleError extends Error {
   constructor(readonly path: readonly string[]) {
@@ -530,7 +539,7 @@ export function createTasksStore(db: PluginDatabase) {
         FROM task_blockers tb
         JOIN tasks blocker ON blocker.id = tb.blocker_task_id
         WHERE tb.blocked_task_id = t.id
-          AND blocker.status NOT IN ('done', 'canceled')
+          AND blocker.status NOT IN (${RESOLVED_BLOCKER_STATUS_SQL})
       ) AS unresolved_blocker_count
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
@@ -1057,7 +1066,7 @@ export function createTasksStore(db: PluginDatabase) {
                   FROM task_blockers tb
                   JOIN tasks blocker ON blocker.id = tb.blocker_task_id
                   WHERE tb.blocked_task_id = t.id
-                    AND blocker.status NOT IN ('done', 'canceled')
+                    AND blocker.status NOT IN (${RESOLVED_BLOCKER_STATUS_SQL})
                 ) AS unresolved_blocker_count
               FROM tasks t
               JOIN projects p ON p.id = t.project_id
@@ -1215,7 +1224,7 @@ export function createTasksStore(db: PluginDatabase) {
   }
 
   const addTaskBlockerTransaction = db.transaction(
-    (input: AddTaskBlockerInput): AddTaskBlockerResult => {
+    (input: TaskBlockerRelation): AddTaskBlockerResult => {
       const blocker = requireTask(input.blockerTaskId);
       requireTask(input.blockedTaskId);
       if (input.blockerTaskId === input.blockedTaskId) {
@@ -1244,13 +1253,11 @@ export function createTasksStore(db: PluginDatabase) {
     },
   );
 
-  function addTaskBlocker(input: AddTaskBlockerInput): AddTaskBlockerResult {
+  function addTaskBlocker(input: TaskBlockerRelation): AddTaskBlockerResult {
     return addTaskBlockerTransaction(input);
   }
 
-  function removeTaskBlocker(
-    input: AddTaskBlockerInput,
-  ): boolean {
+  function removeTaskBlocker(input: TaskBlockerRelation): boolean {
     return (
       db
         .prepare<[string, string]>(

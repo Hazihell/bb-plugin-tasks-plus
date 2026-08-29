@@ -30,12 +30,12 @@ import { cn } from "@/lib/utils";
 import type { TaskEdit } from "./optimistic.js";
 import { PriorityIcon, StatusIcon } from "./icons.js";
 import {
-  blockedLabel,
   DUE_DATE_PRESETS,
   formatDueDate,
   localIsoDate,
   PRIORITY_LABELS,
   STATUS_LABELS,
+  statusUnavailableReason,
 } from "./lib.js";
 
 export type EditFn = (task: Task, patch: TaskEdit) => void;
@@ -164,11 +164,8 @@ export function StatusEditor({
 }) {
   // Blocked is derived and enforced by the API: `in_progress` would be
   // refused, so the menu says so up front instead of offering a dead choice.
-  const unavailableReason = task.blocked
-    ? blockedLabel(task.unresolvedBlockerCount)
-    : null;
   const select = (status: TaskStatus) => {
-    if (unavailableReason !== null && status === "in_progress") return;
+    if (statusUnavailableReason(task, status) !== null) return;
     if (status !== task.status) onEdit(task, { status });
   };
   return (
@@ -197,12 +194,11 @@ export function StatusEditor({
       >
         <MenuHeading label="Change status…" shortcut="S" />
         {TASK_STATUSES.map((status, index) => {
-          const blocked =
-            unavailableReason !== null && status === "in_progress";
+          const unavailableReason = statusUnavailableReason(task, status);
           return (
             <DropdownMenuItem
               key={status}
-              disabled={blocked}
+              disabled={unavailableReason !== null}
               aria-current={status === task.status ? "true" : undefined}
               onSelect={() => select(status)}
             >
@@ -211,7 +207,9 @@ export function StatusEditor({
                 label={STATUS_LABELS[status]}
                 active={status === task.status}
                 shortcut={index + 1}
-                {...(blocked ? { reason: unavailableReason } : {})}
+                {...(unavailableReason === null
+                  ? {}
+                  : { reason: unavailableReason })}
               />
             </DropdownMenuItem>
           );
@@ -308,9 +306,6 @@ export function TaskContextMenu({
   onNewSubtask?: () => void;
   children: ReactNode;
 }) {
-  const unavailableReason = task.blocked
-    ? blockedLabel(task.unresolvedBlockerCount)
-    : null;
   const toggleLabel = (labelId: string) => {
     const labelIds = task.labelIds.includes(labelId)
       ? task.labelIds.filter((id) => id !== labelId)
@@ -329,15 +324,14 @@ export function TaskContextMenu({
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className="min-w-48">
             {TASK_STATUSES.map((status) => {
-              const blocked =
-                unavailableReason !== null && status === "in_progress";
+              const unavailableReason = statusUnavailableReason(task, status);
               return (
                 <ContextMenuItem
                   key={status}
-                  disabled={blocked}
+                  disabled={unavailableReason !== null}
                   aria-current={status === task.status ? "true" : undefined}
                   onSelect={() => {
-                    if (blocked) return;
+                    if (unavailableReason !== null) return;
                     if (status !== task.status) onEdit(task, { status });
                   }}
                 >
@@ -347,7 +341,7 @@ export function TaskContextMenu({
                     {status === task.status ? (
                       <span className="sr-only"> (current)</span>
                     ) : null}
-                    {blocked ? (
+                    {unavailableReason !== null ? (
                       <span className="text-2xs text-subtle-foreground">
                         {unavailableReason}
                       </span>

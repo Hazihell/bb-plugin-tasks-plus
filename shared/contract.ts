@@ -558,21 +558,11 @@ export const tasksRpcContract = defineRpcContract({
     output: taskMutationResultSchema,
   },
   addTaskBlocker: {
-    input: z
-      .object({
-        blockerTaskId: idSchema,
-        blockedTaskId: idSchema,
-      })
-      .strict(),
+    input: taskBlockerRelationSchema,
     output: taskBlockerMutationResultSchema,
   },
   removeTaskBlocker: {
-    input: z
-      .object({
-        blockerTaskId: idSchema,
-        blockedTaskId: idSchema,
-      })
-      .strict(),
+    input: taskBlockerRelationSchema,
     output: z.object({ removed: z.boolean() }).strict(),
   },
   listTaskBlockers: {
