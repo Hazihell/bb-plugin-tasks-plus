@@ -208,28 +208,15 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   const showProject = projectId === null;
   const filtered = hasActiveFilters(filters);
 
-  // Remember/restore the list's scroll offset per distinct list+filter+sort
-  // context, so opening a task and returning (or refreshing) lands where the
-  // user left off. Restore only once the real rows have loaded.
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const scopeKey = listScrollScopeKey({ projectId, activeOnly, filters, sort });
-  // `useListTasks` keeps the previous scope's rows on screen while it refetches
-  // and only flips `isLoading` in a later effect, so on the first render after a
-  // filter/sort change the rows are stale but `isLoading` is still false. Treat
-  // the scope as loading until fresh data for it has settled, giving scroll
-  // restoration a synchronously-correct signal that more rows are still coming.
-  const settledScope = useRef(scopeKey);
-  const scopeChanged = settledScope.current !== scopeKey;
-  useEffect(() => {
-    if (!tasksQuery.isLoading) settledScope.current = scopeKey;
-  }, [scopeKey, tasksQuery.isLoading, tasksQuery.data]);
   // The route scope is the fetch identity across views: All, Active, or one
   // project. Switching it reuses this ListView instance, whose query still
   // holds the previous route's result, so the body below must read as loading
   // until this route's own fetch settles: returning from an empty Active to
   // All must not present Active's emptiness as "No tasks yet". Narrower than
   // `scopeKey` on purpose, so filter and sort changes keep painting the rows
-  // they already have. State, not a ref: settling has to rerender the body.
+  // they already have. State, not a ref: settling has to rerender the body —
+  // and, below, has to lower the scroll restorer's `loading` flag in a render
+  // of its own rather than in a later unrelated one.
   const routeScope = `${projectId ?? "-"}/${activeOnly}`;
   const [settledRouteScope, setSettledRouteScope] = useState(routeScope);
   const routeScopeChanged = settledRouteScope !== routeScope;
@@ -245,9 +232,21 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
       setSettledRouteScope(routeScope);
     }
   }, [routeScope, tasksQuery.isLoading, tasksQuery.data]);
+
+  // Remember/restore the list's scroll offset per distinct list+filter+sort
+  // context, so opening a task and returning (or refreshing) lands where the
+  // user left off. Restore only once the real rows have loaded.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const scopeKey = listScrollScopeKey({ projectId, activeOnly, filters, sort });
   useListScrollRestoration(scrollRef, scopeKey, {
     contentReady: tasksQuery.data !== undefined && tasksQuery.data.length > 0,
-    loading: tasksQuery.isLoading || scopeChanged,
+    // Only a route change refetches — filters and sort are applied to rows we
+    // already hold — so the route scope is the entire "more rows are still
+    // coming" signal. Reusing it here (rather than a ref keyed on the wider
+    // `scopeKey`) means a filter or sort change settles in the very render
+    // that made it, leaving no restore target pending for a later expand or
+    // invalidation to act on.
+    loading: tasksQuery.isLoading || routeScopeChanged,
     revision: tasksQuery.data?.length ?? 0,
   });
 
@@ -354,9 +353,15 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
             <div key={task.id}>
               <TaskRow
                 {...rowProps(task)}
-                childCount={children.length}
-                expanded={expanded}
-                onToggleExpanded={() => toggleExpanded(task.id)}
+                {...(children.length > 0
+                  ? {
+                      expansion: {
+                        childCount: children.length,
+                        expanded,
+                        onToggle: () => toggleExpanded(task.id),
+                      },
+                    }
+                  : {})}
                 onNewSubtask={() => setSubtaskParent(task)}
               />
               {expanded && children.length > 0 ? (

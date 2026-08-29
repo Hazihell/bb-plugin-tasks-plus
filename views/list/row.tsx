@@ -109,6 +109,25 @@ function LabelChips({
   );
 }
 
+/** Counted noun for a row's subtasks, so the chevron's accessible label and
+ * the rail chip's tooltip can never disagree about the plural. */
+function subtaskCount(count: number): string {
+  return `${count} ${count === 1 ? "subtask" : "subtasks"}`;
+}
+
+/**
+ * A row's control over its own subtasks: how many it owns, whether they are
+ * currently shown beneath it, and how to flip that. Travels as one value so a
+ * row either offers expansion or does not — there is no row that reports a
+ * child count it cannot expand, or a chevron with nothing behind it. Absent on
+ * childless parents and on the subtask rows themselves.
+ */
+export interface RowExpansion {
+  childCount: number;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
 /**
  * The row's leading gutter. Always occupies the same width so every title
  * lines up whether or not the row has subtasks; only a row that actually owns
@@ -118,16 +137,12 @@ function LabelChips({
  */
 function ExpandToggle({
   task,
-  childCount,
-  expanded,
-  onToggle,
+  expansion,
 }: {
   task: Task;
-  childCount: number;
-  expanded: boolean;
-  onToggle?: () => void;
+  expansion?: RowExpansion;
 }) {
-  if (childCount === 0 || onToggle === undefined) {
+  if (expansion === undefined) {
     return (
       <span aria-hidden className="col-start-1 row-start-1 size-4 shrink-0" />
     );
@@ -135,15 +150,15 @@ function ExpandToggle({
   return (
     <button
       type="button"
-      aria-expanded={expanded}
-      aria-label={`${expanded ? "Collapse" : "Expand"} ${childCount} ${
-        childCount === 1 ? "subtask" : "subtasks"
-      } of ${task.key}`}
-      onClick={onToggle}
+      aria-expanded={expansion.expanded}
+      aria-label={`${expansion.expanded ? "Collapse" : "Expand"} ${subtaskCount(
+        expansion.childCount,
+      )} of ${task.key}`}
+      onClick={expansion.onToggle}
       className="relative z-10 col-start-1 row-start-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-subtle-foreground hover:bg-state-active focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       <Icon
-        name={expanded ? "ChevronDown" : "ChevronRight"}
+        name={expansion.expanded ? "ChevronDown" : "ChevronRight"}
         className="size-3.5"
       />
     </button>
@@ -153,11 +168,8 @@ function ExpandToggle({
 interface TaskRowProps {
   /** Task with any pending optimistic edit already applied. */
   task: Task;
-  /** How many subtasks this row owns. 0 renders no chevron. */
-  childCount?: number;
-  /** Whether this row's subtasks are currently shown beneath it. */
-  expanded?: boolean;
-  onToggleExpanded?: () => void;
+  /** Present only on a row that owns subtasks; see {@link RowExpansion}. */
+  expansion?: RowExpansion;
   /** Opens the new-subtask dialog with this task pre-selected as parent. */
   onNewSubtask?: () => void;
   meta: TaskRowMeta | undefined;
@@ -182,9 +194,7 @@ interface TaskRowProps {
  */
 export function TaskRow({
   task,
-  childCount = 0,
-  expanded = false,
-  onToggleExpanded,
+  expansion,
   onNewSubtask,
   meta,
   project,
@@ -220,9 +230,7 @@ export function TaskRow({
       >
         <ExpandToggle
           task={task}
-          childCount={childCount}
-          expanded={expanded}
-          {...(onToggleExpanded ? { onToggle: onToggleExpanded } : {})}
+          {...(expansion ? { expansion } : {})}
         />
         <button
           type="button"
@@ -262,13 +270,13 @@ export function TaskRow({
           {task.title}
         </span>
         <span className="col-start-4 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
-          {childCount > 0 ? (
+          {expansion ? (
             <span
-              title={`${childCount} ${childCount === 1 ? "subtask" : "subtasks"}`}
+              title={subtaskCount(expansion.childCount)}
               className={`${RAIL_CHIP_CLASS} shrink-0 tabular-nums`}
             >
               <Icon name="ListTodo" className="size-3 shrink-0" />
-              {childCount}
+              {expansion.childCount}
             </span>
           ) : null}
           {meta ? <ActiveChip threads={meta.activeThreads} /> : null}

@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
-import { act, render } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from "@testing-library/react";
 import { useRef } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
+import { COMPACT_VIEWPORT_QUERY } from "@/components/ui/hooks/use-compact-viewport";
+import type { Task } from "../../shared/contract.js";
 import { EMPTY_FILTERS, type ListFilterState } from "./filter-bar.js";
 import {
   listScrollScopeKey,
@@ -10,6 +19,28 @@ import {
   useListScrollRestoration,
   writeListScroll,
 } from "./scroll-restoration.js";
+
+// jsdom lacks matchMedia/ResizeObserver. Reporting the compact query as
+// matching renders the filter menus as their mobile drawers, whose plain
+// buttons are clickable in jsdom (unlike Radix menu items).
+window.matchMedia = (query: string) => ({
+  matches: query === COMPACT_VIEWPORT_QUERY,
+  media: query,
+  onchange: null,
+  addListener: () => {},
+  removeListener: () => {},
+  addEventListener: () => {},
+  removeEventListener: () => {},
+  dispatchEvent: () => false,
+});
+window.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+};
+Element.prototype.scrollIntoView ??= () => {};
+
+const app = await loadPluginApp(() => import("../../app"));
 
 describe("listScrollScopeKey", () => {
   const base = {
@@ -372,5 +403,108 @@ describe("useListScrollRestoration", () => {
       target.dispatchEvent(new Event("scroll"));
     });
     expect(readListScroll("loading|")).toBeNull();
+  });
+});
+
+/**
+ * The list view's own settle signal. Filters and sort are applied to rows the
+ * view already holds — no refetch — so a filter change must leave nothing
+ * pending for a later render to act on.
+ */
+describe("filter changes in the mounted list", () => {
+  const PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP9";
+
+  function task(number: number, status: Task["status"]): Task {
+    return {
+      id: `01HZZZZZZZZZZZZZZZZZZZZZS${number}`,
+      projectId: PROJECT_ID,
+      number,
+      key: `TSK-${number}`,
+      title: `Task ${number}`,
+      description: "",
+      status,
+      priority: "none",
+      dueDate: null,
+      parentTaskId: null,
+      position: number,
+      createdAt: "2026-07-15T00:00:00.000Z",
+      updatedAt: "2026-07-15T00:00:00.000Z",
+      labelIds: [],
+    };
+  }
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    window.localStorage.clear();
+  });
+  afterEach(cleanup);
+
+  it("settles the scroll scope in the render that changed it", async () => {
+    const rows = [task(1, "todo"), task(2, "todo"), task(3, "done")];
+    let listCalls = 0;
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: PROJECT_ID },
+      {
+        rpc: {
+          listProjects: () => ({
+            projects: [
+              {
+                id: PROJECT_ID,
+                name: "Tasks Plugin",
+                prefix: "TSK",
+                nextTaskNumber: 9,
+                color: "blue",
+                folderId: null,
+                linkedBbProjectId: null,
+                createdAt: "2026-07-15T00:00:00.000Z",
+              },
+            ],
+          }),
+          listFolders: () => ({ folders: [] }),
+          listPresets: () => ({ presets: [] }),
+          sidebarSummary: () => ({ projects: [] }),
+          listLabels: () => ({ labels: [] }),
+          // The refetch brings one more row, so the restorer sees a new
+          // revision — the moment a stale pending target would be applied.
+          listTasks: () => ({
+            tasks: listCalls++ === 0 ? rows : [...rows, task(4, "todo")],
+          }),
+          listTaskThreads: () => ({ taskThreads: [] }),
+          listComments: () => ({ comments: [] }),
+          listAttachments: () => ({ attachments: [] }),
+        },
+      },
+    );
+    await slot.findByText("TSK-1");
+
+    // The scrolling container; jsdom does no layout, so script its metrics.
+    const container =
+      slot.container.querySelector<HTMLDivElement>(".overflow-y-auto");
+    if (container === null) throw new Error("scroll container not found");
+    scriptContainer(container, 600);
+
+    // A remembered offset for the filtered scope that the current height
+    // cannot honor: 600 - 500 leaves room for 100 of the saved 400.
+    writeListScroll(
+      listScrollScopeKey({
+        projectId: PROJECT_ID,
+        activeOnly: false,
+        filters: { statuses: ["todo"], priorities: [], labelNames: [] },
+        sort: "manual",
+      }),
+      400,
+    );
+
+    fireEvent.click(slot.getByRole("button", { name: /Status/ }));
+    fireEvent.click(await slot.findByRole("menuitemcheckbox", { name: /Todo/ }));
+    await waitFor(() => expect(container.scrollTop).toBe(100));
+
+    // Rows arrive from an unrelated invalidation and the list grows. A scope
+    // that only settled in an effect would still be chasing 400 and jump.
+    (container as unknown as { __sh: number }).__sh = 1000;
+    await slot.emitRealtime("tasks:changed", {});
+    await slot.findByText("TSK-4");
+    expect(container.scrollTop).toBe(100);
   });
 });

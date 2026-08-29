@@ -103,13 +103,22 @@ function rowKeys(slot: ReturnType<typeof renderList>): (string | null)[] {
   );
 }
 
-function groupHeader(
+function queryGroupHeader(
+  slot: ReturnType<typeof renderList>,
+  status: Task["status"],
+): HTMLElement | null {
+  return slot.container.querySelector<HTMLElement>(
+    `[data-status-group-header="${status}"]`,
+  );
+}
+
+function getGroupHeader(
   slot: ReturnType<typeof renderList>,
   status: Task["status"],
 ): HTMLElement {
-  return slot.container.querySelector<HTMLElement>(
-    `[data-status-group-header="${status}"]`,
-  )!;
+  const header = queryGroupHeader(slot, status);
+  if (header === null) throw new Error(`no ${status} group header`);
+  return header;
 }
 
 async function expandParent(slot: ReturnType<typeof renderList>) {
@@ -143,14 +152,14 @@ describe("subtasks in the list view", () => {
     );
     // Group membership follows the parent: the done and in-review children sit
     // inside the Todo section, and no In Review group exists at all.
-    const todoSection = groupHeader(slot, "todo").parentElement!;
+    const todoSection = getGroupHeader(slot, "todo").parentElement!;
     expect(
       within(todoSection).getByText("TSK-2").closest("[data-task-key]"),
     ).not.toBeNull();
-    expect(groupHeader(slot, "in_review")).toBeNull();
+    expect(queryGroupHeader(slot, "in_review")).toBeNull();
     // Header counts stay counts of parents: one Todo, one Done.
-    expect(groupHeader(slot, "todo").textContent).toContain("1");
-    expect(groupHeader(slot, "done").textContent).toContain("1");
+    expect(getGroupHeader(slot, "todo").textContent).toContain("1");
+    expect(getGroupHeader(slot, "done").textContent).toContain("1");
     expect(slot.getByText("2 tasks")).toBeTruthy();
   });
 
