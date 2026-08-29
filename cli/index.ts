@@ -28,6 +28,7 @@ import {
   type Project,
   type Preset,
   type Task,
+  type TaskBlocker,
   type TaskMutationResult,
 } from "../shared/contract";
 import {
@@ -68,6 +69,7 @@ Commands:
   label create|list|delete
   attachment add|get|list|remove
   preset list|show|create|update|delete
+  blocker add|rm|list
   dispatch                       Dispatch a task to a new agent thread
   attach                         Attach an agent thread to a task
   detach                         Detach an agent thread from a task
@@ -125,6 +127,10 @@ const ATTACH_HELP =
 const DETACH_HELP =
   "Usage: bb tasks-plus detach <key> [--thread <thread-id>] [--json]";
 const THREADS_HELP = "Usage: bb tasks-plus threads <key> [--json]";
+const BLOCKER_HELP = `Usage:
+  bb tasks-plus blocker add <task> <blocker> [--json]
+  bb tasks-plus blocker rm <task> <blocker> [--json]
+  bb tasks-plus blocker list <task> [--json]`;
 
 interface PluginStatus {
   name: string;
@@ -139,8 +145,27 @@ function normalizePrefix(value: string): string {
 }
 
 function unwrapTask(result: TaskMutationResult): Task {
-  if (!result.ok) throw new CliError(result.error.message);
+  if (!result.ok) throwTaskDomainError(result.error);
   return result.task;
+}
+
+function throwTaskDomainError(error: { code: string; message: string }): never {
+  switch (error.code) {
+    case "task_blocker_cycle":
+      throw new CliError(
+        `Cannot add blocker: ${error.message}. Choose a different blocker so the dependency graph remains acyclic.`,
+      );
+    case "task_blocked":
+      throw new CliError(
+        `${error.message}. Resolve the listed blocker(s) before moving the task to in_progress.`,
+      );
+    case "task_blocker_self":
+      throw new CliError(
+        `Cannot add blocker: ${error.message}. Choose a different task.`,
+      );
+    default:
+      throw new CliError(error.message);
+  }
 }
 
 // CLI handlers execute on the server, so a path argument names a file on the
@@ -401,6 +426,36 @@ async function listAllTasks(
     cursor = page.nextCursor ?? undefined;
   } while (cursor !== undefined);
   return tasks;
+}
+
+function blockerIsResolved(blocker: Pick<TaskBlocker, "status">): boolean {
+  return blocker.status === "done" || blocker.status === "canceled";
+}
+
+function blockerProjectName(
+  blocker: Pick<TaskBlocker, "projectId">,
+  projectsById: ReadonlyMap<string, Project>,
+): string {
+  const project = projectsById.get(blocker.projectId);
+  return project ? `${project.prefix} — ${project.name}` : blocker.projectId;
+}
+
+function renderBlockerTable(
+  blockers: readonly TaskBlocker[],
+  projectsById: ReadonlyMap<string, Project>,
+  emptyMessage: string,
+): string {
+  return table(
+    ["KEY", "STATE", "STATUS", "PROJECT", "TITLE"],
+    blockers.map((blocker) => [
+      blocker.key,
+      blockerIsResolved(blocker) ? "RESOLVED" : "UNRESOLVED",
+      blocker.status,
+      blockerProjectName(blocker, projectsById),
+      blocker.title,
+    ]),
+    emptyMessage,
+  );
 }
 
 function taskPageLimit(args: ParsedArgs): number {
@@ -1160,6 +1215,19 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
         tasksRpcContract.listTaskPullRequests.input.parse({ taskId: task.id }),
       ),
     );
+  const blockers = tasksRpcContract.listTaskBlockers.output.parse(
+    await domain.listTaskBlockers(
+      tasksRpcContract.listTaskBlockers.input.parse({ taskId: task.id }),
+    ),
+  );
+  const blocking = tasksRpcContract.listTaskBlocking.output.parse(
+    await domain.listTaskBlocking(
+      tasksRpcContract.listTaskBlocking.input.parse({ taskId: task.id }),
+    ),
+  );
+  const projectsById = new Map(
+    (await listProjects(domain)).map((candidate) => [candidate.id, candidate]),
+  );
   const payload = {
     task,
     project,
@@ -1170,6 +1238,8 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
     pullRequests,
     pullRequestUnavailableThreadIds: unavailableThreadIds,
     comments,
+    blockers: blockers.blockers,
+    blocking: blocking.blocking,
   };
   if (args.flags.has("json")) return JSON.stringify(payload);
 
@@ -1187,6 +1257,16 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
       ["Updated", task.updatedAt],
     ]),
     `Description\n${task.description || "(none)"}`,
+    `Blocked by (${blockers.unresolvedCount} unresolved)\n${renderBlockerTable(
+      blockers.blockers,
+      projectsById,
+      "No blockers.",
+    )}`,
+    `Blocking\n${renderBlockerTable(
+      blocking.blocking,
+      projectsById,
+      "No blocked tasks.",
+    )}`,
     `Sub-tasks\n${table(
       ["KEY", "STATUS", "PRIORITY", "TITLE"],
       subtasks.map((subtask) => [
@@ -1474,6 +1554,93 @@ async function runLabel(domain: TasksDomain, argv: string[]): Promise<string> {
   }
 
   throw new CliError(`unknown label subcommand: ${action}`);
+}
+
+async function runBlocker(
+  domain: TasksDomain,
+  argv: string[],
+): Promise<string> {
+  const [action, ...rest] = argv;
+  if (!action || action === "--help") return BLOCKER_HELP;
+  const args = parseArgs(rest);
+  if (args.flags.has("help")) return BLOCKER_HELP;
+
+  if (action === "add") {
+    assertAllowed(args, []);
+    const [taskAddress, blockerAddress] = requirePositionals(
+      args,
+      2,
+      "bb tasks-plus blocker add <task> <blocker> [--json]",
+    );
+    const task = await resolveTask(domain, taskAddress!);
+    const blocker = await resolveTask(domain, blockerAddress!);
+    const result = tasksRpcContract.addTaskBlocker.output.parse(
+      await domain.addTaskBlocker(
+        tasksRpcContract.addTaskBlocker.input.parse({
+          blockerTaskId: blocker.id,
+          blockedTaskId: task.id,
+        }),
+      ),
+    );
+    if (!result.ok) throwTaskDomainError(result.error);
+    return args.flags.has("json")
+      ? JSON.stringify({ task, blocker, ...result })
+      : result.added
+        ? `Added blocker ${blocker.key} to ${task.key}`
+        : `Blocker ${blocker.key} is already set for ${task.key}`;
+  }
+
+  if (action === "rm") {
+    assertAllowed(args, []);
+    const [taskAddress, blockerAddress] = requirePositionals(
+      args,
+      2,
+      "bb tasks-plus blocker rm <task> <blocker> [--json]",
+    );
+    const task = await resolveTask(domain, taskAddress!);
+    const blocker = await resolveTask(domain, blockerAddress!);
+    const result = tasksRpcContract.removeTaskBlocker.output.parse(
+      await domain.removeTaskBlocker(
+        tasksRpcContract.removeTaskBlocker.input.parse({
+          blockerTaskId: blocker.id,
+          blockedTaskId: task.id,
+        }),
+      ),
+    );
+    return args.flags.has("json")
+      ? JSON.stringify({ task, blocker, ...result })
+      : result.removed
+        ? `Removed blocker ${blocker.key} from ${task.key}`
+        : `No blocker ${blocker.key} was set for ${task.key}`;
+  }
+
+  if (action === "list") {
+    assertAllowed(args, []);
+    const [taskAddress] = requirePositionals(
+      args,
+      1,
+      "bb tasks-plus blocker list <task> [--json]",
+    );
+    const task = await resolveTask(domain, taskAddress!);
+    const result = tasksRpcContract.listTaskBlockers.output.parse(
+      await domain.listTaskBlockers(
+        tasksRpcContract.listTaskBlockers.input.parse({ taskId: task.id }),
+      ),
+    );
+    if (args.flags.has("json")) {
+      return JSON.stringify({ task, ...result });
+    }
+    const projectsById = new Map(
+      (await listProjects(domain)).map((project) => [project.id, project]),
+    );
+    return `Blockers for ${task.key}\n${renderBlockerTable(
+      result.blockers,
+      projectsById,
+      "No blockers.",
+    )}\nUnresolved blockers  ${result.unresolvedCount}`;
+  }
+
+  throw new CliError(`unknown blocker subcommand: ${action}`);
 }
 
 async function runAttachment(
@@ -2033,6 +2200,11 @@ export function registerTasksCli(
         usage: PRESET_HELP,
       },
       {
+        name: "blocker",
+        summary: "Add, remove, or list task blockers",
+        usage: BLOCKER_HELP,
+      },
+      {
         name: "dispatch",
         summary: "Dispatch a task to a new agent thread",
         usage: DISPATCH_HELP,
@@ -2109,6 +2281,9 @@ export function registerTasksCli(
             break;
           case "preset":
             stdout = await runPreset(domain, rest);
+            break;
+          case "blocker":
+            stdout = await runBlocker(domain, rest);
             break;
           case "dispatch":
           // Hidden alias kept for compatibility; help advertises "dispatch".

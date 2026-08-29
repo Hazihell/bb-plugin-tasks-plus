@@ -2075,4 +2075,160 @@ describe("bb tasks-plus CLI", () => {
 
     await harness.dispose();
   });
+
+  it("manages blockers, distinguishes resolved blockers, and shows both directions", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    await plugin(bb);
+
+    stdout(
+      await harness.runCli([
+        "project",
+        "create",
+        "--name",
+        "Local blockers",
+        "--prefix",
+        "LOC",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "project",
+        "create",
+        "--name",
+        "External blockers",
+        "--prefix",
+        "EXT",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "create",
+        "--project",
+        "LOC",
+        "--title",
+        "Blocked task",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "create",
+        "--project",
+        "LOC",
+        "--title",
+        "Resolved prerequisite",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "create",
+        "--project",
+        "LOC",
+        "--title",
+        "Dependent task",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "create",
+        "--project",
+        "EXT",
+        "--title",
+        "External prerequisite",
+      ]),
+    );
+
+    const added = JSON.parse(
+      stdout(await harness.runCli(["blocker", "add", "LOC-1", "EXT-1", "--json"])),
+    );
+    expect(added).toMatchObject({
+      task: { key: "LOC-1" },
+      blocker: { key: "EXT-1" },
+      ok: true,
+      added: true,
+      relation: {
+        blockerTaskId: added.blocker.id,
+        blockedTaskId: added.task.id,
+      },
+    });
+    const idempotent = JSON.parse(
+      stdout(await harness.runCli(["blocker", "add", "LOC-1", "EXT-1", "--json"])),
+    );
+    expect(idempotent).toMatchObject({ ok: true, added: false });
+
+    stdout(await harness.runCli(["blocker", "add", "LOC-1", "LOC-2"]));
+    stdout(await harness.runCli(["update", "LOC-2", "--status", "done"]));
+    stdout(await harness.runCli(["blocker", "add", "LOC-3", "LOC-1"]));
+
+    const listed = JSON.parse(
+      stdout(await harness.runCli(["blocker", "list", "LOC-1", "--json"])),
+    );
+    expect(listed).toMatchObject({
+      task: { key: "LOC-1", blocked: true, unresolvedBlockerCount: 1 },
+      unresolvedCount: 1,
+      blockers: expect.arrayContaining([
+        expect.objectContaining({ key: "EXT-1", status: "backlog" }),
+        expect.objectContaining({ key: "LOC-2", status: "done" }),
+      ]),
+    });
+    expect(
+      listed.blockers.find((blocker) => blocker.key === "EXT-1").projectId,
+    ).not.toBe(listed.task.projectId);
+
+    const humanList = stdout(
+      await harness.runCli(["blocker", "list", "LOC-1"]),
+    );
+    expect(humanList).toContain("STATE");
+    expect(humanList).toContain("UNRESOLVED");
+    expect(humanList).toContain("RESOLVED");
+    expect(humanList).toContain("EXT — External blockers");
+
+    const blockedUpdate = await harness.runCli([
+      "update",
+      "LOC-1",
+      "--status",
+      "in_progress",
+    ]);
+    expect(blockedUpdate.exitCode).toBe(1);
+    expect(blockedUpdate.stderr).toContain("LOC-1 is blocked by unresolved task");
+    expect(blockedUpdate.stderr).toContain("Resolve the listed blocker(s)");
+
+    const cycle = await harness.runCli([
+      "blocker",
+      "add",
+      "LOC-1",
+      "LOC-3",
+    ]);
+    expect(cycle.exitCode).toBe(1);
+    expect(cycle.stderr).toContain("Cannot add blocker");
+    expect(cycle.stderr).toContain("dependency graph remains acyclic");
+
+    const shown = JSON.parse(
+      stdout(await harness.runCli(["show", "LOC-1", "--json"])),
+    );
+    expect(shown.blockers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "EXT-1" }),
+        expect.objectContaining({ key: "LOC-2", status: "done" }),
+      ]),
+    );
+    expect(shown.blocking).toEqual([
+      expect.objectContaining({ key: "LOC-3", projectId: shown.task.projectId }),
+    ]);
+    const shownHuman = stdout(await harness.runCli(["show", "LOC-1"]));
+    expect(shownHuman).toContain("Blocked by");
+    expect(shownHuman).toContain("Blocking");
+    expect(shownHuman).toContain("EXT — External blockers");
+
+    stdout(await harness.runCli(["blocker", "rm", "LOC-1", "LOC-2"]));
+    const missingEdge = await harness.runCli([
+      "blocker",
+      "rm",
+      "LOC-1",
+      "LOC-2",
+      "--json",
+    ]);
+    expect(JSON.parse(stdout(missingEdge))).toMatchObject({ removed: false });
+
+    await harness.dispose();
+  });
 });
