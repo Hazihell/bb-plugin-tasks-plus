@@ -356,6 +356,48 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("refuses to dispatch a task with unresolved blockers before spawning", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: { threads: { spawn: async () => ({ id: "thr_never" }) } },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Blocked dispatch",
+      prefix: "BD",
+      color: "blue",
+      linkedBbProjectId: "proj_demo",
+    });
+    const blocker = store.tasks.createTask({
+      projectId: project.id,
+      title: "Unfinished prerequisite",
+      status: "todo",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Blocked work",
+    });
+    store.tasks.addTaskBlocker({
+      blockerTaskId: blocker.id,
+      blockedTaskId: task.id,
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await expect(
+      harness.callRpc("delegate", { taskId: task.id, presetId: preset.id }),
+    ).rejects.toMatchObject({
+      code: "handler_error",
+      message: expect.stringContaining(
+        `Cannot dispatch ${task.key} is blocked by unresolved task: ${blocker.key}`,
+      ),
+    });
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
+    expect(store.tasks.listTaskThreads(task.id)).toEqual([]);
+
+    await harness.dispose();
+  });
+
   it("self-attaches an existing thread through taskThreadsAttach", async () => {
     const { bb, harness } = createFakePluginHost({
       pluginId: "tasks",

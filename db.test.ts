@@ -59,7 +59,7 @@ describe("tasks storage", () => {
             { count: number }
           >("SELECT COUNT(*) AS count FROM schema_version")
           .get()?.count,
-      ).toBe(6);
+      ).toBe(7);
     } finally {
       await harness.dispose();
     }
@@ -799,6 +799,165 @@ describe("tasks storage", () => {
       expect(() => store.createPreset(preset)).toThrow(
         /UNIQUE constraint failed: presets.name/,
       );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("derives blockers, resolves done and canceled blockers, and supports cross-project edges", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "BLK");
+      const otherProject = createProject(store, "EXT");
+      const doneBlocker = store.createTask({
+        projectId: project.id,
+        title: "Done blocker",
+        status: "todo",
+      });
+      const canceledBlocker = store.createTask({
+        projectId: otherProject.id,
+        title: "Canceled blocker",
+        status: "todo",
+      });
+      const blocked = store.createTask({
+        projectId: project.id,
+        title: "Dependent task",
+      });
+
+      expect(
+        store.addTaskBlocker({
+          blockerTaskId: doneBlocker.id,
+          blockedTaskId: blocked.id,
+        }),
+      ).toMatchObject({ added: true });
+      expect(
+        store.addTaskBlocker({
+          blockerTaskId: canceledBlocker.id,
+          blockedTaskId: blocked.id,
+        }),
+      ).toMatchObject({ added: true });
+      expect(store.getTask(blocked.id)).toMatchObject({
+        blocked: true,
+        unresolvedBlockerCount: 2,
+      });
+      expect(store.listTaskBlockers(blocked.id)).toEqual([
+        expect.objectContaining({
+          id: doneBlocker.id,
+          key: doneBlocker.key,
+          title: doneBlocker.title,
+          status: "todo",
+          projectId: project.id,
+        }),
+        expect.objectContaining({
+          id: canceledBlocker.id,
+          key: canceledBlocker.key,
+          title: canceledBlocker.title,
+          status: "todo",
+          projectId: otherProject.id,
+        }),
+      ]);
+      expect(store.listTaskBlocking(doneBlocker.id)).toEqual([
+        expect.objectContaining({ id: blocked.id }),
+      ]);
+
+      store.updateTask(doneBlocker.id, { status: "done" });
+      expect(store.getTask(blocked.id)).toMatchObject({
+        blocked: true,
+        unresolvedBlockerCount: 1,
+      });
+      store.updateTask(canceledBlocker.id, { status: "canceled" });
+      expect(store.getTask(blocked.id)).toMatchObject({
+        blocked: false,
+        unresolvedBlockerCount: 0,
+      });
+      expect(store.listTaskBlockers(blocked.id)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: doneBlocker.id, status: "done" }),
+          expect.objectContaining({
+            id: canceledBlocker.id,
+            status: "canceled",
+          }),
+        ]),
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("rejects self-edges and direct or multi-hop blocker cycles", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "CYC");
+      const first = store.createTask({ projectId: project.id, title: "First" });
+      const second = store.createTask({
+        projectId: project.id,
+        title: "Second",
+      });
+      const third = store.createTask({ projectId: project.id, title: "Third" });
+
+      expect(() =>
+        store.addTaskBlocker({
+          blockerTaskId: first.id,
+          blockedTaskId: first.id,
+        }),
+      ).toThrow("A task cannot block itself");
+      store.addTaskBlocker({
+        blockerTaskId: first.id,
+        blockedTaskId: second.id,
+      });
+      expect(() =>
+        store.addTaskBlocker({
+          blockerTaskId: second.id,
+          blockedTaskId: first.id,
+        }),
+      ).toThrow(`${second.key} -> ${first.key} -> ${second.key}`);
+      store.addTaskBlocker({
+        blockerTaskId: second.id,
+        blockedTaskId: third.id,
+      });
+      expect(() =>
+        store.addTaskBlocker({
+          blockerTaskId: third.id,
+          blockedTaskId: first.id,
+        }),
+      ).toThrow(
+        `${third.key} -> ${first.key} -> ${second.key} -> ${third.key}`,
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("cascades blocker edges when either task is deleted", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "DEL");
+      const blocker = store.createTask({
+        projectId: project.id,
+        title: "Blocker",
+      });
+      const blocked = store.createTask({
+        projectId: project.id,
+        title: "Blocked",
+      });
+      store.addTaskBlocker({
+        blockerTaskId: blocker.id,
+        blockedTaskId: blocked.id,
+      });
+      expect(store.listTaskBlocking(blocker.id)).toHaveLength(1);
+      expect(store.deleteTask(blocker.id)).toBe(true);
+      expect(store.listTaskBlockers(blocked.id)).toEqual([]);
+
+      const secondBlocker = store.createTask({
+        projectId: project.id,
+        title: "Second blocker",
+      });
+      store.addTaskBlocker({
+        blockerTaskId: secondBlocker.id,
+        blockedTaskId: blocked.id,
+      });
+      expect(store.deleteTask(blocked.id)).toBe(true);
+      expect(store.listTaskBlocking(secondBlocker.id)).toEqual([]);
     } finally {
       await harness.dispose();
     }

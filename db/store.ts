@@ -13,6 +13,8 @@ import {
   presetServiceTierSchema,
 } from "../shared/contract.js";
 import type {
+  AddTaskBlockerInput,
+  AddTaskBlockerResult,
   Attachment,
   Comment,
   CreateAttachmentInput,
@@ -32,6 +34,7 @@ import type {
   Project,
   SubtaskDoneCounts,
   Task,
+  TaskBlocker,
   TaskLabel,
   TaskThread,
   TaskThreadLiveStatus,
@@ -55,6 +58,13 @@ const MIN_POSITION_GAP = 0.000_001;
 const PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+
+export class TaskBlockerCycleError extends Error {
+  constructor(readonly path: readonly string[]) {
+    super(`Adding this blocker would create a cycle: ${path.join(" -> ")}`);
+    this.name = "TaskBlockerCycleError";
+  }
+}
 
 interface FolderRow {
   id: string;
@@ -88,6 +98,7 @@ interface TaskRow {
   position: number;
   created_at: string;
   updated_at: string;
+  unresolved_blocker_count: number;
 }
 
 interface TaskPageRow extends TaskRow {
@@ -378,6 +389,18 @@ function taskFromRow(row: TaskRow): Task {
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    blocked: row.unresolved_blocker_count > 0,
+    unresolvedBlockerCount: row.unresolved_blocker_count,
+  };
+}
+
+function taskBlockerFromTask(task: Task): TaskBlocker {
+  return {
+    id: task.id,
+    key: task.key,
+    title: task.title,
+    status: task.status,
+    projectId: task.projectId,
   };
 }
 
@@ -502,6 +525,13 @@ export function createTasksStore(db: PluginDatabase) {
   );
   const taskSelect = `
     SELECT t.*, p.prefix AS project_prefix
+      ,(
+        SELECT COUNT(*)
+        FROM task_blockers tb
+        JOIN tasks blocker ON blocker.id = tb.blocker_task_id
+        WHERE tb.blocked_task_id = t.id
+          AND blocker.status NOT IN ('done', 'canceled')
+      ) AS unresolved_blocker_count
     FROM tasks t
     JOIN projects p ON p.id = t.project_id
   `;
@@ -1021,7 +1051,14 @@ export function createTasksStore(db: PluginDatabase) {
                 t.project_id AS cursor_project_id,
                 t.status AS cursor_status,
                 t.position AS cursor_position,
-                t.id AS cursor_id
+                t.id AS cursor_id,
+                (
+                  SELECT COUNT(*)
+                  FROM task_blockers tb
+                  JOIN tasks blocker ON blocker.id = tb.blocker_task_id
+                  WHERE tb.blocked_task_id = t.id
+                    AND blocker.status NOT IN ('done', 'canceled')
+                ) AS unresolved_blocker_count
               FROM tasks t
               JOIN projects p ON p.id = t.project_id
               ${filteredWhere}
@@ -1108,6 +1145,118 @@ export function createTasksStore(db: PluginDatabase) {
       `,
         )
         .get(parentTaskId) ?? { total: 0, done: 0 }
+    );
+  }
+
+  function listTaskBlockerIds(blockerTaskId: string): string[] {
+    return db
+      .prepare<[string], { blocked_task_id: string }>(
+        `
+          SELECT blocked_task_id
+          FROM task_blockers
+          WHERE blocker_task_id = ?
+          ORDER BY blocked_task_id
+        `,
+      )
+      .all(blockerTaskId)
+      .map((row) => row.blocked_task_id);
+  }
+
+  function findTaskBlockerPath(
+    fromTaskId: string,
+    toTaskId: string,
+  ): string[] | null {
+    const queue: string[][] = [[fromTaskId]];
+    const visited = new Set([fromTaskId]);
+    while (queue.length > 0) {
+      const path = queue.shift()!;
+      const current = path.at(-1)!;
+      for (const next of listTaskBlockerIds(current)) {
+        if (next === toTaskId) return [...path, next];
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push([...path, next]);
+        }
+      }
+    }
+    return null;
+  }
+
+  function listTaskBlockers(taskId: string): TaskBlocker[] {
+    requireTask(taskId);
+    return db
+      .prepare<[string], TaskRow>(
+        `
+          ${taskSelect}
+          JOIN task_blockers tb ON tb.blocker_task_id = t.id
+          WHERE tb.blocked_task_id = ?
+          ORDER BY t.project_id, t.number, t.id
+        `,
+      )
+      .all(taskId)
+      .map(taskFromRow)
+      .map(taskBlockerFromTask);
+  }
+
+  function listTaskBlocking(taskId: string): TaskBlocker[] {
+    requireTask(taskId);
+    return db
+      .prepare<[string], TaskRow>(
+        `
+          ${taskSelect}
+          JOIN task_blockers tb ON tb.blocked_task_id = t.id
+          WHERE tb.blocker_task_id = ?
+          ORDER BY t.project_id, t.number, t.id
+        `,
+      )
+      .all(taskId)
+      .map(taskFromRow)
+      .map(taskBlockerFromTask);
+  }
+
+  const addTaskBlockerTransaction = db.transaction(
+    (input: AddTaskBlockerInput): AddTaskBlockerResult => {
+      const blocker = requireTask(input.blockerTaskId);
+      requireTask(input.blockedTaskId);
+      if (input.blockerTaskId === input.blockedTaskId) {
+        throw new Error("A task cannot block itself");
+      }
+      const path = findTaskBlockerPath(
+        input.blockedTaskId,
+        input.blockerTaskId,
+      );
+      if (path !== null) {
+        throw new TaskBlockerCycleError([
+          blocker.key,
+          ...path.map((taskId) => requireTask(taskId).key),
+        ]);
+      }
+      const added = db.prepare<[string, string]>(
+        "INSERT OR IGNORE INTO task_blockers (blocker_task_id, blocked_task_id) VALUES (?, ?)",
+      ).run(input.blockerTaskId, input.blockedTaskId).changes > 0;
+      return {
+        relation: {
+          blockerTaskId: input.blockerTaskId,
+          blockedTaskId: input.blockedTaskId,
+        },
+        added,
+      };
+    },
+  );
+
+  function addTaskBlocker(input: AddTaskBlockerInput): AddTaskBlockerResult {
+    return addTaskBlockerTransaction(input);
+  }
+
+  function removeTaskBlocker(
+    input: AddTaskBlockerInput,
+  ): boolean {
+    return (
+      db
+        .prepare<[string, string]>(
+          "DELETE FROM task_blockers WHERE blocker_task_id = ? AND blocked_task_id = ?",
+        )
+        .run(input.blockerTaskId, input.blockedTaskId).changes > 0
     );
   }
 
@@ -1853,6 +2002,10 @@ export function createTasksStore(db: PluginDatabase) {
     listTasks,
     listSubtasks,
     getSubtaskDoneCounts,
+    listTaskBlockers,
+    listTaskBlocking,
+    addTaskBlocker,
+    removeTaskBlocker,
     updateTask,
     updatePosition,
     deleteTask,

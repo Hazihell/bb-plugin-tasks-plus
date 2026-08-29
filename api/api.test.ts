@@ -1480,6 +1480,208 @@ describe("Tasks RPC domain API", () => {
 
     await harness.dispose();
   });
+
+  it("exposes blocker relations, list-row derivation, and API enforcement", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const store = createStore(bb);
+    registerTasksApi(bb, store);
+    const project = store.tasks.createProject({
+      name: "Local project",
+      prefix: "LOC",
+      color: "blue",
+    });
+    const otherProject = store.tasks.createProject({
+      name: "External project",
+      prefix: "EXT",
+      color: "green",
+    });
+    const blocker = store.tasks.createTask({
+      projectId: otherProject.id,
+      title: "External prerequisite",
+      status: "todo",
+    });
+    const blocked = store.tasks.createTask({
+      projectId: project.id,
+      title: "Local dependent",
+    });
+    const add = tasksRpcContract.addTaskBlocker.output.parse(
+      await harness.callRpc("addTaskBlocker", {
+        blockerTaskId: blocker.id,
+        blockedTaskId: blocked.id,
+      }),
+    );
+    expect(add).toEqual({
+      ok: true,
+      added: true,
+      relation: {
+        blockerTaskId: blocker.id,
+        blockedTaskId: blocked.id,
+      },
+    });
+
+    const details = tasksRpcContract.listTaskBlockers.output.parse(
+      await harness.callRpc("listTaskBlockers", { taskId: blocked.id }),
+    );
+    expect(details).toEqual({
+      blockers: [
+        {
+          id: blocker.id,
+          key: blocker.key,
+          title: blocker.title,
+          status: "todo",
+          projectId: otherProject.id,
+        },
+      ],
+      unresolvedCount: 1,
+    });
+    expect(
+      tasksRpcContract.listTaskBlocking.output.parse(
+        await harness.callRpc("listTaskBlocking", { taskId: blocker.id }),
+      ),
+    ).toEqual({
+      blocking: [
+        expect.objectContaining({ id: blocked.id, projectId: project.id }),
+      ],
+    });
+    const list = tasksRpcContract.listTasks.output.parse(
+      await harness.callRpc("listTasks", { projectId: project.id }),
+    );
+    expect(list.tasks).toEqual([
+      expect.objectContaining({
+        id: blocked.id,
+        blocked: true,
+        unresolvedBlockerCount: 1,
+      }),
+    ]);
+
+    const update = tasksRpcContract.updateTask.output.parse(
+      await harness.callRpc("updateTask", {
+        taskId: blocked.id,
+        status: "in_progress",
+      }),
+    );
+    expect(update).toEqual({
+      ok: false,
+      error: {
+        code: "task_blocked",
+        message: expect.stringContaining(`${blocker.key} (${blocker.title})`),
+      },
+    });
+    const move = tasksRpcContract.boardMove.output.parse(
+      await harness.callRpc("boardMove", {
+        taskId: blocked.id,
+        status: "in_progress",
+      }),
+    );
+    expect(move).toEqual({
+      ok: false,
+      error: {
+        code: "task_blocked",
+        message: expect.stringContaining(blocker.key),
+      },
+    });
+    expect(store.tasks.getTask(blocked.id)?.status).toBe("backlog");
+
+    const completed = tasksRpcContract.updateTask.output.parse(
+      await harness.callRpc("updateTask", {
+        taskId: blocked.id,
+        status: "done",
+      }),
+    );
+    expect(completed).toMatchObject({ ok: true, task: { status: "done" } });
+
+    harness.realtimeSignals.length = 0;
+    const resolved = tasksRpcContract.updateTask.output.parse(
+      await harness.callRpc("updateTask", {
+        taskId: blocker.id,
+        status: "done",
+      }),
+    );
+    expect(resolved).toMatchObject({ ok: true, task: { status: "done" } });
+    expect(store.tasks.getTask(blocked.id)).toMatchObject({
+      blocked: false,
+      unresolvedBlockerCount: 0,
+    });
+    expect(harness.realtimeSignals).toEqual(
+      expect.arrayContaining([
+        {
+          channel: "tasks:changed",
+          payload: { taskId: blocker.id, projectId: otherProject.id },
+        },
+        {
+          channel: "tasks:changed",
+          payload: { taskId: blocked.id, projectId: project.id },
+        },
+      ]),
+    );
+
+    const removed = tasksRpcContract.removeTaskBlocker.output.parse(
+      await harness.callRpc("removeTaskBlocker", {
+        blockerTaskId: blocker.id,
+        blockedTaskId: blocked.id,
+      }),
+    );
+    expect(removed).toEqual({ removed: true });
+    expect(
+      tasksRpcContract.listTaskBlockers.output.parse(
+        await harness.callRpc("listTaskBlockers", { taskId: blocked.id }),
+      ),
+    ).toEqual({ blockers: [], unresolvedCount: 0 });
+
+    await harness.dispose();
+  });
+
+  it("rejects self, direct, and multi-hop cycles through the blocker RPC", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    const store = createStore(bb);
+    registerTasksApi(bb, store);
+    const project = store.tasks.createProject({
+      name: "Cycle project",
+      prefix: "CYC",
+      color: "blue",
+    });
+    const first = store.tasks.createTask({
+      projectId: project.id,
+      title: "First",
+    });
+    const second = store.tasks.createTask({
+      projectId: project.id,
+      title: "Second",
+    });
+    const third = store.tasks.createTask({
+      projectId: project.id,
+      title: "Third",
+    });
+    const add = async (blockerTaskId: string, blockedTaskId: string) =>
+      tasksRpcContract.addTaskBlocker.output.parse(
+        await harness.callRpc("addTaskBlocker", {
+          blockerTaskId,
+          blockedTaskId,
+        }),
+      );
+
+    expect(await add(first.id, first.id)).toMatchObject({
+      ok: false,
+      error: { code: "task_blocker_self" },
+    });
+    expect(await add(first.id, second.id)).toMatchObject({ ok: true });
+    expect(await add(second.id, first.id)).toEqual({
+      ok: false,
+      error: {
+        code: "task_blocker_cycle",
+        message: `Adding this blocker would create a cycle: ${second.key} -> ${first.key} -> ${second.key}`,
+      },
+    });
+    expect(await add(second.id, third.id)).toMatchObject({ ok: true });
+    expect(await add(third.id, first.id)).toEqual({
+      ok: false,
+      error: {
+        code: "task_blocker_cycle",
+        message: `Adding this blocker would create a cycle: ${third.key} -> ${first.key} -> ${second.key} -> ${third.key}`,
+      },
+    });
+    await harness.dispose();
+  });
 });
 
 type PullRequestLookup =

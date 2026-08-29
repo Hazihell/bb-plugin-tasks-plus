@@ -1,6 +1,7 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import {
   createTasksStore,
+  TaskBlockerCycleError,
   type Attachment as StoredAttachment,
   type Comment as StoredComment,
   type Task as StoredTask,
@@ -223,6 +224,65 @@ function apiTasks(store: TasksApiStore, tasks: StoredTask[]): Task[] {
     ...task,
     labelIds: labelsByTask.get(task.id) ?? [],
   }));
+}
+
+function unresolvedBlockers(
+  store: TasksApiStore,
+  taskId: string,
+): ReturnType<TasksStore["listTaskBlockers"]> {
+  return store.tasks
+    .listTaskBlockers(taskId)
+    .filter(
+      (blocker) =>
+        blocker.status !== "done" && blocker.status !== "canceled",
+    );
+}
+
+function taskBlockedMessage(
+  task: StoredTask,
+  blockers: ReturnType<TasksStore["listTaskBlockers"]>,
+): string {
+  const names = blockers
+    .map((blocker) => `${blocker.key} (${blocker.title})`)
+    .join(", ");
+  return `${task.key} is blocked by unresolved task${
+    blockers.length === 1 ? "" : "s"
+  }: ${names}`;
+}
+
+export function assertTaskCanEnterInProgress(
+  store: TasksApiStore,
+  task: StoredTask,
+): void {
+  const blockers = unresolvedBlockers(store, task.id);
+  if (blockers.length > 0) {
+    fail("task_blocked", taskBlockedMessage(task, blockers));
+  }
+}
+
+export function assertTaskCanBeDispatched(
+  store: TasksApiStore,
+  task: StoredTask,
+): void {
+  const blockers = unresolvedBlockers(store, task.id);
+  if (blockers.length > 0) {
+    fail(
+      "task_blocked",
+      `Cannot dispatch ${taskBlockedMessage(task, blockers)}`,
+    );
+  }
+}
+
+function publishTaskChanges(
+  bb: BbPluginApi,
+  tasks: readonly Pick<StoredTask, "id" | "projectId">[],
+): void {
+  const published = new Set<string>();
+  for (const task of tasks) {
+    if (published.has(task.id)) continue;
+    published.add(task.id);
+    publishTasksChanged(bb, task.id, task.projectId);
+  }
 }
 
 function validateTaskParent(
@@ -769,6 +829,18 @@ export function registerHandlers(
             ? current.parentTaskId
             : input.parentTaskId;
         validateTaskParent(store, current.projectId, parentTaskId, current.id);
+        const nextStatus = input.status ?? current.status;
+        if (
+          nextStatus === "in_progress" &&
+          current.status !== "in_progress"
+        ) {
+          assertTaskCanEnterInProgress(store, current);
+        }
+        const blockerDetailsChanged =
+          input.title !== undefined || input.status !== undefined;
+        const dependents = blockerDetailsChanged
+          ? store.tasks.listTaskBlocking(current.id)
+          : [];
         if (input.labelIds) {
           validateTaskLabels(store, current.projectId, input.labelIds);
         }
@@ -817,7 +889,7 @@ export function registerHandlers(
           };
         });
 
-        publishTasksChanged(bb, result.task.id, result.task.projectId);
+        publishTaskChanges(bb, [result.task, ...dependents]);
         if (result.systemCommentsWritten > 0) {
           publishCommentsChanged(bb, result.task.id);
         }
@@ -827,13 +899,82 @@ export function registerHandlers(
         throw error;
       }
     },
+    addTaskBlocker(input) {
+      try {
+        if (input.blockerTaskId === input.blockedTaskId) {
+          fail("task_blocker_self", "A task cannot block itself");
+        }
+        const result = store.transaction(() =>
+          store.tasks.addTaskBlocker({
+            blockerTaskId: input.blockerTaskId,
+            blockedTaskId: input.blockedTaskId,
+          }),
+        );
+        if (result.added) {
+          const blocker = store.tasks.getTask(input.blockerTaskId);
+          const blocked = store.tasks.getTask(input.blockedTaskId);
+          publishTaskChanges(
+            bb,
+            [blocker, blocked].filter(
+              (task): task is StoredTask => task !== undefined,
+            ),
+          );
+        }
+        return { ok: true, ...result };
+      } catch (error) {
+        if (error instanceof TasksDomainFailure) return taskFailure(error);
+        if (error instanceof TaskBlockerCycleError) {
+          return {
+            ok: false as const,
+            error: {
+              code: "task_blocker_cycle" as const,
+              message: error.message,
+            },
+          };
+        }
+        throw error;
+      }
+    },
+    removeTaskBlocker(input) {
+      const blocker = store.tasks.getTask(input.blockerTaskId);
+      const blocked = store.tasks.getTask(input.blockedTaskId);
+      const removed = store.tasks.removeTaskBlocker(input);
+      if (removed) {
+        publishTaskChanges(
+          bb,
+          [blocker, blocked].filter(
+            (task): task is StoredTask => task !== undefined,
+          ),
+        );
+      }
+      return { removed };
+    },
+    listTaskBlockers(input) {
+      const blockers = store.tasks.listTaskBlockers(input.taskId);
+      return {
+        blockers,
+        unresolvedCount: blockers.filter(
+          (blocker) =>
+            blocker.status !== "done" && blocker.status !== "canceled",
+        ).length,
+      };
+    },
+    listTaskBlocking(input) {
+      return { blocking: store.tasks.listTaskBlocking(input.taskId) };
+    },
     async deleteTask(input) {
       const task = store.tasks.getTask(input.taskId);
+      const relatedTasks = task
+        ? [
+            ...store.tasks.listTaskBlockers(task.id),
+            ...store.tasks.listTaskBlocking(task.id),
+          ]
+        : [];
       const attachments = attachmentsForTasks(store.tasks, [input.taskId]);
       const deleted = store.tasks.deleteTask(input.taskId);
       if (deleted && task) {
         await removeAttachmentBlobs(bb, store.tasks, attachments);
-        publishTasksChanged(bb, task.id, task.projectId);
+        publishTaskChanges(bb, [task, ...relatedTasks]);
       }
       return { deleted };
     },
@@ -856,25 +997,40 @@ export function registerHandlers(
       };
     },
     boardMove(input) {
-      const current = store.tasks.getTask(input.taskId);
-      if (!current) throw new Error(`Task not found: ${input.taskId}`);
-      const result = store.transaction(() => {
-        const moved = store.tasks.updatePosition(current.id, {
-          status: input.status,
-          beforeTaskId: input.beforeTaskId,
-          afterTaskId: input.afterTaskId,
-        });
-        const statusChanged = moved.status !== current.status;
-        if (statusChanged) {
-          writeSystemComments(store, current.id, input.authorName, [
-            `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
-          ]);
+      try {
+        const current = store.tasks.getTask(input.taskId);
+        if (!current) throw new Error(`Task not found: ${input.taskId}`);
+        if (
+          input.status === "in_progress" &&
+          current.status !== "in_progress"
+        ) {
+          assertTaskCanEnterInProgress(store, current);
         }
-        return { task: apiTask(store, moved), statusChanged };
-      });
-      publishTasksChanged(bb, result.task.id, result.task.projectId);
-      if (result.statusChanged) publishCommentsChanged(bb, result.task.id);
-      return { ok: true, task: result.task };
+        const statusChanged = input.status !== current.status;
+        const dependents = statusChanged
+          ? store.tasks.listTaskBlocking(current.id)
+          : [];
+        const result = store.transaction(() => {
+          const moved = store.tasks.updatePosition(current.id, {
+            status: input.status,
+            beforeTaskId: input.beforeTaskId,
+            afterTaskId: input.afterTaskId,
+          });
+          const statusChanged = moved.status !== current.status;
+          if (statusChanged) {
+            writeSystemComments(store, current.id, input.authorName, [
+              `Status changed to ${statusName(moved.status)} by ${input.authorName}`,
+            ]);
+          }
+          return { task: apiTask(store, moved), statusChanged };
+        });
+        publishTaskChanges(bb, [result.task, ...dependents]);
+        if (result.statusChanged) publishCommentsChanged(bb, result.task.id);
+        return { ok: true, task: result.task };
+      } catch (error) {
+        if (error instanceof TasksDomainFailure) return taskFailure(error);
+        throw error;
+      }
     },
     createLabel(input) {
       const label = store.tasks.createLabel(input);

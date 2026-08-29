@@ -128,7 +128,26 @@ const taskSchema = z
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
+    blocked: z.boolean(),
+    unresolvedBlockerCount: z.number().int().nonnegative(),
     labelIds: z.array(idSchema),
+  })
+  .strict();
+
+const taskBlockerSchema = z
+  .object({
+    id: idSchema,
+    key: z.string(),
+    title: z.string(),
+    status: taskStatusSchema,
+    projectId: idSchema,
+  })
+  .strict();
+
+const taskBlockerRelationSchema = z
+  .object({
+    blockerTaskId: idSchema,
+    blockedTaskId: idSchema,
   })
   .strict();
 
@@ -260,6 +279,9 @@ const tasksDomainErrorSchema = z
       "task_parent_invalid",
       "subtask_depth_exceeded",
       "subtask_project_mismatch",
+      "task_blocker_self",
+      "task_blocker_cycle",
+      "task_blocked",
       "label_project_mismatch",
       "project_not_empty",
       "project_prefix_conflict",
@@ -271,6 +293,17 @@ const tasksDomainErrorSchema = z
 
 const taskMutationResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), task: taskSchema }).strict(),
+  z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
+]);
+
+const taskBlockerMutationResultSchema = z.discriminatedUnion("ok", [
+  z
+    .object({
+      ok: z.literal(true),
+      relation: taskBlockerRelationSchema,
+      added: z.boolean(),
+    })
+    .strict(),
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
 
@@ -524,6 +557,37 @@ export const tasksRpcContract = defineRpcContract({
     input: updateTaskInputSchema,
     output: taskMutationResultSchema,
   },
+  addTaskBlocker: {
+    input: z
+      .object({
+        blockerTaskId: idSchema,
+        blockedTaskId: idSchema,
+      })
+      .strict(),
+    output: taskBlockerMutationResultSchema,
+  },
+  removeTaskBlocker: {
+    input: z
+      .object({
+        blockerTaskId: idSchema,
+        blockedTaskId: idSchema,
+      })
+      .strict(),
+    output: z.object({ removed: z.boolean() }).strict(),
+  },
+  listTaskBlockers: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z
+      .object({
+        blockers: z.array(taskBlockerSchema),
+        unresolvedCount: z.number().int().nonnegative(),
+      })
+      .strict(),
+  },
+  listTaskBlocking: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z.object({ blocking: z.array(taskBlockerSchema) }).strict(),
+  },
   deleteTask: {
     input: z.object({ taskId: idSchema }).strict(),
     output: z.object({ deleted: z.boolean() }).strict(),
@@ -774,6 +838,8 @@ export type TasksRpcContract = typeof tasksRpcContract;
 export type Folder = z.infer<typeof folderSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;
+export type TaskBlocker = z.infer<typeof taskBlockerSchema>;
+export type TaskBlockerRelation = z.infer<typeof taskBlockerRelationSchema>;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export type Label = z.infer<typeof labelSchema>;

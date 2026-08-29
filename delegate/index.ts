@@ -12,6 +12,7 @@ import type {
 import {
   publishCommentsChanged,
   publishTasksChanged,
+  assertTaskCanBeDispatched,
   type TasksApiStore,
 } from "../api";
 import {
@@ -307,6 +308,7 @@ export function handlers(
   return {
     async delegate(input) {
       const task = requireTask(store.tasks, input.taskId);
+      assertTaskCanBeDispatched(store, task);
       const project = requireProject(store.tasks, task.projectId);
       const linkedBbProjectId = requireLinkedBbProject(project);
       const preset = requirePreset(store.tasks, input.presetId);

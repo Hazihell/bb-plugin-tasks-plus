@@ -49,6 +49,26 @@ export interface Task {
   position: number;
   createdAt: string;
   updatedAt: string;
+  blocked: boolean;
+  unresolvedBlockerCount: number;
+}
+
+export interface TaskBlocker {
+  id: string;
+  key: string;
+  title: string;
+  status: TaskStatus;
+  projectId: string;
+}
+
+export interface TaskBlockerRelation {
+  blockerTaskId: string;
+  blockedTaskId: string;
+}
+
+export interface AddTaskBlockerResult {
+  relation: TaskBlockerRelation;
+  added: boolean;
 }
 
 export interface Label {
@@ -190,6 +210,11 @@ export interface ListTasksFilters {
 export interface ListTasksPage {
   tasks: Task[];
   nextCursor: string | null;
+}
+
+export interface AddTaskBlockerInput {
+  blockerTaskId: string;
+  blockedTaskId: string;
 }
 
 export interface UpdateTaskPositionInput {
