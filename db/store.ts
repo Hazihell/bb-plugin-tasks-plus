@@ -24,10 +24,12 @@ import type {
   CreateLabelInput,
   CreatePresetInput,
   CreateProjectInput,
+  CreateTaskArtifactInput,
   CreateTaskInput,
   DeleteFolderResult,
   Folder,
   Label,
+  ListTaskArtifactsFilters,
   ListTasksFilters,
   ListTasksPage,
   Preset,
@@ -35,6 +37,8 @@ import type {
   Project,
   SubtaskDoneCounts,
   Task,
+  TaskArtifact,
+  TaskArtifactKind,
   TaskBlocker,
   TaskBlockerRelation,
   TaskLabel,
@@ -157,6 +161,19 @@ interface AttachmentRow {
   size_bytes: number;
   blob_path: string;
   is_image: number;
+  created_at: string;
+}
+
+interface TaskArtifactRow {
+  id: string;
+  task_id: string;
+  kind: TaskArtifactKind;
+  title: string;
+  body: string | null;
+  external_url: string | null;
+  attachment_id: string | null;
+  source_thread_id: string | null;
+  metadata_json: string;
   created_at: string;
 }
 
@@ -454,6 +471,52 @@ function attachmentFromRow(row: AttachmentRow): Attachment {
   };
 }
 
+/**
+ * Metadata must survive a JSON round trip unchanged, so only a plain object
+ * qualifies: a Map or a class instance would serialize to `{}` and silently
+ * lose everything the caller put in it.
+ */
+function requirePlainJsonObject(value: unknown): Record<string, unknown> {
+  const prototype =
+    typeof value === "object" && value !== null
+      ? Object.getPrototypeOf(value)
+      : undefined;
+  if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error("Task artifact metadata must be a JSON object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseMetadata(json: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("Task artifact metadata must be a JSON object");
+  }
+  return requirePlainJsonObject(parsed);
+}
+
+function serializeMetadata(value: Record<string, unknown> | undefined): string {
+  if (value === undefined) return "{}";
+  return JSON.stringify(requirePlainJsonObject(value));
+}
+
+function taskArtifactFromRow(row: TaskArtifactRow): TaskArtifact {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    kind: row.kind,
+    title: row.title,
+    body: row.body,
+    externalUrl: row.external_url,
+    attachmentId: row.attachment_id,
+    sourceThreadId: row.source_thread_id,
+    metadata: parseMetadata(row.metadata_json),
+    createdAt: row.created_at,
+  };
+}
+
 function taskThreadFromRow(row: TaskThreadRow): TaskThread {
   return {
     id: row.id,
@@ -555,6 +618,9 @@ export function createTasksStore(db: PluginDatabase) {
   );
   const getAttachmentRow = db.prepare<[string], AttachmentRow>(
     "SELECT * FROM attachments WHERE id = ?",
+  );
+  const getTaskArtifactRow = db.prepare<[string], TaskArtifactRow>(
+    "SELECT * FROM task_artifacts WHERE id = ?",
   );
   const getTaskThreadRow = db.prepare<[string], TaskThreadRow>(
     "SELECT * FROM task_threads WHERE id = ?",
@@ -1751,6 +1817,126 @@ export function createTasksStore(db: PluginDatabase) {
     );
   }
 
+  function getTaskArtifact(id: string): TaskArtifact | undefined {
+    const row = getTaskArtifactRow.get(id);
+    return row ? taskArtifactFromRow(row) : undefined;
+  }
+
+  function requireTaskArtifact(id: string): TaskArtifact {
+    const artifact = getTaskArtifact(id);
+    if (!artifact) throw new Error(`Task artifact not found: ${id}`);
+    return artifact;
+  }
+
+  /**
+   * An attachment may hang off the task itself or off one of its comments;
+   * either way it must belong to the same task as the artifact that cites it,
+   * so an artifact can never point at another task's payload.
+   */
+  function attachmentBelongsToTask(
+    attachment: Attachment,
+    taskId: string,
+  ): boolean {
+    if (attachment.taskId !== null) return attachment.taskId === taskId;
+    if (attachment.commentId === null) return false;
+    return requireComment(attachment.commentId).taskId === taskId;
+  }
+
+  /**
+   * Absence has one representation: a blank string is stored as NULL. A
+   * non-blank value is stored as given — a prose body is the caller's text,
+   * not ours to canonicalize.
+   */
+  function blankToNull(value: string | null | undefined): string | null {
+    if (value === undefined || value === null) return null;
+    return value.trim() === "" ? null : value;
+  }
+
+  const createTaskArtifactTransaction = db.transaction(
+    (input: CreateTaskArtifactInput): TaskArtifact => {
+      const id = createOrValidateUlid(input.id);
+      requireTask(input.taskId);
+      const title = requireNonEmpty(input.title, "Task artifact title");
+      const sourceThreadId = validateThreadId(input.sourceThreadId ?? null);
+      const attachmentId = input.attachmentId ?? null;
+      if (attachmentId !== null) {
+        const attachment = requireAttachment(attachmentId);
+        if (!attachmentBelongsToTask(attachment, input.taskId)) {
+          throw new Error(
+            "A task artifact attachment must belong to the same task",
+          );
+        }
+      }
+      db.prepare<
+        [
+          string,
+          string,
+          string,
+          string,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+          string,
+          string,
+        ]
+      >(
+        `
+        INSERT INTO task_artifacts (
+          id, task_id, kind, title, body, external_url, attachment_id,
+          source_thread_id, metadata_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      ).run(
+        id,
+        input.taskId,
+        input.kind,
+        title,
+        blankToNull(input.body),
+        blankToNull(input.externalUrl?.trim()),
+        attachmentId,
+        sourceThreadId,
+        serializeMetadata(input.metadata),
+        nowIso(),
+      );
+      return requireTaskArtifact(id);
+    },
+  );
+
+  function createTaskArtifact(input: CreateTaskArtifactInput): TaskArtifact {
+    return createTaskArtifactTransaction(input);
+  }
+
+  function listTaskArtifacts(
+    taskId: string,
+    filters: ListTaskArtifactsFilters = {},
+  ): TaskArtifact[] {
+    const clauses = ["task_id = ?"];
+    const parameters: string[] = [taskId];
+    if (filters.kinds !== undefined) {
+      if (filters.kinds.length === 0) return [];
+      clauses.push(`kind IN (${filters.kinds.map(() => "?").join(", ")})`);
+      parameters.push(...filters.kinds);
+    }
+    return db
+      .prepare<string[], TaskArtifactRow>(
+        `
+        SELECT * FROM task_artifacts
+        WHERE ${clauses.join(" AND ")}
+        ORDER BY kind, created_at, id
+      `,
+      )
+      .all(...parameters)
+      .map(taskArtifactFromRow);
+  }
+
+  function deleteTaskArtifact(id: string): boolean {
+    return (
+      db.prepare<[string]>("DELETE FROM task_artifacts WHERE id = ?").run(id)
+        .changes > 0
+    );
+  }
+
   function getTaskThread(id: string): TaskThread | undefined {
     const row = getTaskThreadRow.get(id);
     return row ? taskThreadFromRow(row) : undefined;
@@ -2037,6 +2223,10 @@ export function createTasksStore(db: PluginDatabase) {
     listAttachmentsForComment,
     updateAttachment,
     deleteAttachment,
+    createTaskArtifact,
+    getTaskArtifact,
+    listTaskArtifacts,
+    deleteTaskArtifact,
     upsertTaskThread,
     getTaskThread,
     getTaskThreadByThreadId,

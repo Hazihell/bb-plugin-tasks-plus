@@ -59,7 +59,7 @@ describe("tasks storage", () => {
             { count: number }
           >("SELECT COUNT(*) AS count FROM schema_version")
           .get()?.count,
-      ).toBe(7);
+      ).toBe(8);
     } finally {
       await harness.dispose();
     }
@@ -958,6 +958,324 @@ describe("tasks storage", () => {
       });
       expect(store.deleteTask(blocked.id)).toBe(true);
       expect(store.listTaskBlocking(secondBlocker.id)).toEqual([]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("recreates the task artifacts table on an existing database", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const project = createProject(store, "MIG");
+      const task = store.createTask({
+        projectId: project.id,
+        title: "Survives the migration",
+      });
+      db.exec(`
+        DROP INDEX idx_task_artifacts_task;
+        DROP TABLE task_artifacts;
+        DELETE FROM schema_version WHERE version = 8;
+      `);
+
+      createTasksStore(db);
+
+      expect(
+        db
+          .prepare<[], { name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'task_artifacts'",
+          )
+          .get()?.name,
+      ).toBe("task_artifacts");
+      expect(
+        db
+          .prepare<[], { name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_task_artifacts_task'",
+          )
+          .get()?.name,
+      ).toBe("idx_task_artifacts_task");
+      expect(store.getTask(task.id)?.title).toBe("Survives the migration");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("rejects task artifact kinds outside the allowed set", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const project = createProject(store, "KND");
+      const task = store.createTask({ projectId: project.id, title: "Kinds" });
+      expect(() =>
+        db
+          .prepare<[string, string]>(
+            `
+            INSERT INTO task_artifacts (
+              id, task_id, kind, title, metadata_json, created_at
+            ) VALUES (?, ?, 'pull_request', 'Nope', '{}', '2026-08-01T00:00:00.000Z')
+          `,
+          )
+          .run("01J00000000000000000000010", task.id),
+      ).toThrow();
+      expect(
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "decision",
+          title: "Allowed",
+        }).kind,
+      ).toBe("decision");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("deletes task artifacts with their task", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "CAS");
+      const task = store.createTask({ projectId: project.id, title: "Doomed" });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "evidence",
+        title: "Log",
+      });
+      expect(store.deleteTask(task.id)).toBe(true);
+      expect(store.getTaskArtifact(artifact.id)).toBeUndefined();
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("keeps a task artifact when its attachment is deleted", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "ATN");
+      const task = store.createTask({ projectId: project.id, title: "Holds" });
+      const attachment = store.createAttachment({
+        taskId: task.id,
+        fileName: "plan.md",
+        mime: "text/markdown",
+        sizeBytes: 12,
+        blobPath: "blobs/md/plan.md",
+        isImage: false,
+      });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "approved_plan",
+        title: "Approved plan",
+        attachmentId: attachment.id,
+      });
+      expect(artifact.attachmentId).toBe(attachment.id);
+
+      expect(store.deleteAttachment(attachment.id)).toBe(true);
+
+      expect(store.getTaskArtifact(artifact.id)?.attachmentId).toBeNull();
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("lists task artifacts by kind then creation order and filters by kind", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const project = createProject(store, "ORD");
+      const task = store.createTask({
+        projectId: project.id,
+        title: "Ordered",
+      });
+      const other = store.createTask({ projectId: project.id, title: "Other" });
+      const review = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Review",
+      });
+      const firstDecision = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "decision",
+        title: "First decision",
+      });
+      const secondDecision = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "decision",
+        title: "Second decision",
+      });
+      const thirdDecision = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "decision",
+        title: "Third decision",
+      });
+      const plan = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "approved_plan",
+        title: "Plan",
+      });
+      store.createTaskArtifact({
+        taskId: other.id,
+        kind: "decision",
+        title: "Elsewhere",
+      });
+
+      // Backdate the rows so creation order disagrees with timestamp order:
+      // ordering by (kind, id) alone would pass otherwise. The two artifacts
+      // sharing a timestamp are what proves the `id` tie-break.
+      const backdate = db.prepare<[string, string]>(
+        "UPDATE task_artifacts SET created_at = ? WHERE id = ?",
+      );
+      backdate.run("2026-01-04T00:00:00.000Z", firstDecision.id);
+      backdate.run("2026-01-02T00:00:00.000Z", secondDecision.id);
+      backdate.run("2026-01-02T00:00:00.000Z", thirdDecision.id);
+
+      expect(store.listTaskArtifacts(task.id).map((a) => a.id)).toEqual([
+        plan.id,
+        secondDecision.id,
+        thirdDecision.id,
+        firstDecision.id,
+        review.id,
+      ]);
+      expect(
+        store
+          .listTaskArtifacts(task.id, { kinds: ["decision"] })
+          .map((a) => a.id),
+      ).toEqual([secondDecision.id, thirdDecision.id, firstDecision.id]);
+      expect(store.listTaskArtifacts(task.id, { kinds: [] })).toEqual([]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("requires a task artifact attachment to belong to the same task", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "OWN");
+      const task = store.createTask({ projectId: project.id, title: "Owner" });
+      const stranger = store.createTask({
+        projectId: project.id,
+        title: "Stranger",
+      });
+      const foreign = store.createAttachment({
+        taskId: stranger.id,
+        fileName: "foreign.md",
+        mime: "text/markdown",
+        sizeBytes: 3,
+        blobPath: "blobs/md/foreign.md",
+        isImage: false,
+      });
+      expect(() =>
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "evidence",
+          title: "Borrowed",
+          attachmentId: foreign.id,
+        }),
+      ).toThrow("A task artifact attachment must belong to the same task");
+
+      const comment = store.createComment({
+        taskId: task.id,
+        kind: "agent",
+        authorName: "Agent",
+        body: "Evidence attached",
+      });
+      const owned = store.createAttachment({
+        commentId: comment.id,
+        fileName: "owned.md",
+        mime: "text/markdown",
+        sizeBytes: 3,
+        blobPath: "blobs/md/owned.md",
+        isImage: false,
+      });
+      expect(
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "evidence",
+          title: "Owned",
+          attachmentId: owned.id,
+        }).attachmentId,
+      ).toBe(owned.id);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("round-trips task artifact metadata and rejects non-object metadata", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "MET");
+      const task = store.createTask({ projectId: project.id, title: "Meta" });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review_result",
+        title: "Result",
+        metadata: { findings: 2, verdict: "pass" },
+      });
+      expect(store.getTaskArtifact(artifact.id)?.metadata).toEqual({
+        findings: 2,
+        verdict: "pass",
+      });
+      expect(
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "review_result",
+          title: "Bare",
+        }).metadata,
+      ).toEqual({});
+      expect(() =>
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "review_result",
+          title: "Array",
+          metadata: [1, 2] as unknown as Record<string, unknown>,
+        }),
+      ).toThrow("Task artifact metadata must be a JSON object");
+      expect(() =>
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "review_result",
+          title: "Map",
+          metadata: new Map([["findings", 2]]) as unknown as Record<
+            string,
+            unknown
+          >,
+        }),
+      ).toThrow("Task artifact metadata must be a JSON object");
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("normalizes blank task artifact fields and deletes by id", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "BLK");
+      const task = store.createTask({ projectId: project.id, title: "Blank" });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "implementation_plan",
+        title: "  Plan  ",
+        body: "   ",
+        externalUrl: "",
+        sourceThreadId: "thr_abc",
+      });
+      expect(artifact.title).toBe("Plan");
+      expect(artifact.body).toBeNull();
+      expect(artifact.externalUrl).toBeNull();
+      expect(artifact.sourceThreadId).toBe("thr_abc");
+      const prose = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "decision",
+        title: "Prose",
+        body: "  indented\n",
+        externalUrl: "  https://example.test/pr/1  ",
+      });
+      expect(prose.body).toBe("  indented\n");
+      expect(prose.externalUrl).toBe("https://example.test/pr/1");
+      expect(() =>
+        store.createTaskArtifact({
+          taskId: task.id,
+          kind: "implementation_plan",
+          title: "Bad thread",
+          sourceThreadId: "abc",
+        }),
+      ).toThrow("threadId must be a bb thr_* id");
+      expect(store.deleteTaskArtifact(artifact.id)).toBe(true);
+      expect(store.deleteTaskArtifact(artifact.id)).toBe(false);
     } finally {
       await harness.dispose();
     }
