@@ -13,6 +13,7 @@ import {
   presetServiceTierSchema,
 } from "../shared/contract.js";
 import { RESOLVED_BLOCKER_STATUSES } from "../shared/blockers.js";
+import { PROJECT_PREFIX_PATTERN } from "../shared/project-prefix.js";
 import type {
   AddTaskBlockerResult,
   Attachment,
@@ -56,7 +57,6 @@ type SqlParameter = string | number;
 const ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const POSITION_STEP = 1_024;
 const MIN_POSITION_GAP = 0.000_001;
-const PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 /**

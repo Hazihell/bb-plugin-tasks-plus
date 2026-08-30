@@ -624,8 +624,23 @@ describe("bb tasks-plus CLI", () => {
     await harness.dispose();
   });
 
-  it("defaults create and list to the tracker project linked to CLI project context", async () => {
-    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+  it("defaults create and list to linked projects and auto-creates missing ones", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        projects: {
+          get: async ({ projectId }) => ({
+            id: projectId,
+            name: "Missing BB Project",
+            kind: "standard",
+            sources: [],
+            gitRemoteUrl: null,
+            createdAt: 0,
+            updatedAt: 0,
+          }),
+        },
+      },
+    });
     await plugin(bb);
     const context = { projectId: "proj_linked" };
 
@@ -661,15 +676,82 @@ describe("bb tasks-plus CLI", () => {
       expect.objectContaining({ id: task.id, agentsWorking: 0 }),
     ]);
 
-    const missing = await harness.runCli(["create", "--title", "No link"], {
-      projectId: "proj_missing",
+    const firstAutoCreated = await harness.runCli(
+      ["create", "--title", "Creates the missing project", "--json"],
+      {
+        projectId: "proj_missing",
+      },
+    );
+    expect(firstAutoCreated).toMatchObject({
+      exitCode: 0,
+      stderr:
+        'Created and linked tracker project "Missing BB Project" (MBP) to BB project proj_missing',
     });
-    expect(missing).toMatchObject({
+    const firstAutoTask = JSON.parse(firstAutoCreated.stdout).task;
+    expect(firstAutoTask).toMatchObject({
+      key: "MBP-1",
+      title: "Creates the missing project",
+    });
+
+    const secondAutoCreated = await harness.runCli(
+      ["create", "--title", "Reuses the project"],
+      { projectId: "proj_missing" },
+    );
+    expect(secondAutoCreated).toMatchObject({
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(secondAutoCreated.stdout).toContain(
+      "Created MBP-2  Reuses the project",
+    );
+    expect(harness.sdk.callsTo("projects.get")).toHaveLength(1);
+
+    const autoProjects = JSON.parse(
+      stdout(await harness.runCli(["project", "list", "--json"])),
+    ).projects;
+    expect(autoProjects).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Missing BB Project",
+          prefix: "MBP",
+          linkedBbProjectId: "proj_missing",
+        }),
+      ]),
+    );
+
+    const missingContext = await harness.runCli([
+      "create",
+      "--title",
+      "No context",
+    ]);
+    expect(missingContext).toMatchObject({
       exitCode: 1,
       stdout: "",
-      stderr:
-        "no tracker project is linked to BB project proj_missing; pass --project or link one with bb tasks-plus project update",
+      stderr: "missing --project and no BB project context is available",
     });
+
+    await harness.dispose();
+  });
+
+  it("does not create a tracker project when list has an untracked BB context", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        projects: {
+          get: async () => {
+            throw new Error("list must not read the BB project");
+          },
+        },
+      },
+    });
+    await plugin(bb);
+
+    const result = await harness.runCli(["list", "--json"], {
+      projectId: "proj_untracked",
+    });
+    expect(result).toMatchObject({ exitCode: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toMatchObject({ tasks: [] });
+    expect(harness.sdk.callsTo("projects.get")).toEqual([]);
 
     await harness.dispose();
   });

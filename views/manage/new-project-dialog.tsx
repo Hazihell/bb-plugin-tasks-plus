@@ -26,12 +26,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icon";
 import {
+  derivePrefix,
+  PROJECT_PREFIX_PATTERN,
+} from "../../shared/project-prefix.js";
+import {
   ColorSwatchPicker,
   DEFAULT_COLOR,
   describeCreateProjectError,
-  derivePrefix,
   Field,
-  PROJECT_PREFIX_PATTERN,
 } from "./shared.js";
 import {
   BbProjectLinkPicker,

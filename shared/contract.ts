@@ -5,6 +5,7 @@ import {
   TASKS_PAGE_DEFAULT_LIMIT,
   TASKS_PAGE_MAX_LIMIT,
 } from "./pagination.js";
+import { PROJECT_PREFIX_PATTERN } from "./project-prefix.js";
 
 export const TASK_STATUSES = [
   "backlog",
@@ -37,7 +38,6 @@ export const PRESET_ENVIRONMENT_KINDS = [
 ] as const;
 
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
-const PROJECT_PREFIX_PATTERN = /^[A-Z][A-Z0-9]{0,9}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const idSchema = z.string().regex(ULID_PATTERN, "must be a ULID");

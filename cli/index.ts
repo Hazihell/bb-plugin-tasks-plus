@@ -37,6 +37,7 @@ import {
   TASKS_PAGE_MAX_LIMIT,
 } from "../shared/pagination";
 import { isBlockerResolved } from "../shared/blockers";
+import { deriveUniquePrefix } from "../shared/project-prefix.js";
 import {
   assertAllowed,
   CliError,
@@ -287,20 +288,6 @@ function validateSingleFlagChoice(
   }
 }
 
-function derivePrefix(name: string, projects: readonly Project[]): string {
-  let base = name.toUpperCase().replace(/[^A-Z0-9]/gu, "");
-  if (!base || !/^[A-Z]/u.test(base)) base = `P${base}`;
-  base = base.slice(0, 10);
-  const used = new Set(projects.map((project) => project.prefix));
-  if (!used.has(base)) return base;
-  for (let number = 2; number < 10_000; number += 1) {
-    const suffix = String(number);
-    const candidate = `${base.slice(0, 10 - suffix.length)}${suffix}`;
-    if (!used.has(candidate)) return candidate;
-  }
-  throw new CliError(`could not derive a unique prefix from ${name}`);
-}
-
 async function listProjects(domain: TasksDomain): Promise<Project[]> {
   return tasksRpcContract.listProjects.output.parse(
     await domain.listProjects(tasksRpcContract.listProjects.input.parse({})),
@@ -321,44 +308,67 @@ async function resolveProject(
   return project;
 }
 
+interface ProjectSelection {
+  project: Project | undefined;
+  created: boolean;
+}
+
 async function defaultProject(
+  bb: BbPluginApi,
   domain: TasksDomain,
   ctx: PluginCliContext,
   required: boolean,
-): Promise<Project | undefined> {
+): Promise<ProjectSelection> {
   if (!ctx.projectId) {
     if (required) {
       throw new CliError(
         "missing --project and no BB project context is available",
       );
     }
-    return undefined;
+    return { project: undefined, created: false };
   }
-  const matches = (await listProjects(domain)).filter(
+  const projects = await listProjects(domain);
+  const matches = projects.filter(
     (project) => project.linkedBbProjectId === ctx.projectId,
   );
   if (matches.length === 0) {
-    throw new CliError(
-      `no tracker project is linked to BB project ${ctx.projectId}; pass --project or link one with bb tasks-plus project update`,
-    );
+    if (required) {
+      const bbProject = await bb.sdk.projects.get({
+        projectId: ctx.projectId,
+      });
+      const result = tasksRpcContract.createProject.output.parse(
+        await domain.createProject(
+          tasksRpcContract.createProject.input.parse({
+            name: bbProject.name,
+            prefix: deriveUniquePrefix(bbProject.name, projects),
+            color: DEFAULT_PROJECT_COLOR,
+            folderId: null,
+            linkedBbProjectId: ctx.projectId,
+          }),
+        ),
+      );
+      return { project: result.project, created: true };
+    }
+    return { project: undefined, created: false };
   }
   if (matches.length > 1) {
     throw new CliError(
       `multiple tracker projects are linked to BB project ${ctx.projectId}; pass --project explicitly`,
     );
   }
-  return matches[0];
+  return { project: matches[0], created: false };
 }
 
 async function selectedProject(
+  bb: BbPluginApi,
   domain: TasksDomain,
   ctx: PluginCliContext,
   address: string | undefined,
   required: boolean,
-): Promise<Project | undefined> {
+): Promise<ProjectSelection> {
   return address
-    ? resolveProject(domain, address)
-    : defaultProject(domain, ctx, required);
+    ? { project: await resolveProject(domain, address), created: false }
+    : defaultProject(bb, domain, ctx, required);
 }
 
 async function resolveFolder(
@@ -626,7 +636,7 @@ async function runProject(
           name,
           prefix: option(args, "prefix")
             ? normalizePrefix(requireOption(args, "prefix"))
-            : derivePrefix(name, projects),
+            : deriveUniquePrefix(name, projects),
           color: option(args, "color") ?? DEFAULT_PROJECT_COLOR,
           folderId: folder?.id ?? null,
           linkedBbProjectId: option(args, "link-bb-project") ?? null,
@@ -960,12 +970,14 @@ async function runCreate(
       bytes: await readAttachmentSource(bb, clientHostId, path),
     });
   }
-  const project = await selectedProject(
+  const selection = await selectedProject(
+    bb,
     domain,
     ctx,
     option(args, "project"),
     true,
   );
+  const project = selection.project;
   if (!project) throw new CliError("project is required");
   const labels = await projectLabels(domain, project.id);
   const labelIds = options(args, "label").map(
@@ -1035,11 +1047,23 @@ async function runCreate(
             )
           : []),
       ].join("\n");
-  if (failedAttachments.length === 0) return stdout;
+  const createdProjectNotice = selection.created
+    ? `Created and linked tracker project "${project.name}" (${project.prefix}) to BB project ${ctx.projectId}`
+    : undefined;
+  if (failedAttachments.length === 0) {
+    return createdProjectNotice
+      ? { exitCode: 0, stdout, stderr: createdProjectNotice }
+      : stdout;
+  }
   return {
     exitCode: 1,
     stdout,
-    stderr: `created ${task.key}, but ${failedAttachments.length} of ${attachPaths.length} attachments failed; see stdout for per-file recovery commands`,
+    stderr: [
+      createdProjectNotice,
+      `created ${task.key}, but ${failedAttachments.length} of ${attachPaths.length} attachments failed; see stdout for per-file recovery commands`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
   };
 }
 
@@ -1057,6 +1081,7 @@ async function labelsForTaskList(
 }
 
 async function runList(
+  bb: BbPluginApi,
   domain: TasksDomain,
   ctx: PluginCliContext,
   argv: string[],
@@ -1085,7 +1110,8 @@ async function runList(
       `invalid sort: ${sortOption} (${TASK_SORTS.join(", ")})`,
     );
   }
-  const project = await selectedProject(
+  const { project } = await selectedProject(
+    bb,
     domain,
     ctx,
     option(args, "project"),
@@ -2259,7 +2285,7 @@ export function registerTasksCli(
             break;
           }
           case "list":
-            stdout = await runList(domain, ctx, rest);
+            stdout = await runList(bb, domain, ctx, rest);
             break;
           case "show":
             stdout = await runShow(domain, rest);

@@ -35,7 +35,7 @@ if (!window.matchMedia) {
 // loadPluginApp installs the fake SDK runtime; nothing SDK-touching may be
 // imported before it runs.
 const app = await loadPluginApp(() => import("../../app"));
-const { derivePrefix } = await import("./shared.js");
+const { derivePrefix } = await import("../../shared/project-prefix.js");
 const { describePresetEnvironment, savePresetDraft } =
   await import("./preset-dialog.js");
 
