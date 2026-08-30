@@ -2,30 +2,10 @@
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import { COMPACT_VIEWPORT_QUERY } from "@/components/ui/hooks/use-compact-viewport";
 import type { Task } from "../../shared/contract.js";
+import { installBrowserMocks } from "./browser-mocks.js";
 
-// jsdom lacks matchMedia/ResizeObserver. Reporting the compact query as
-// matching renders the responsive Sort menu as its mobile drawer, which is
-// the regression under test (the desktop Radix path is exercised by the
-// shared dropdown-menu suite) — and the drawer's plain buttons are clickable
-// in jsdom, unlike Radix menu items.
-window.matchMedia = (query: string) => ({
-  matches: query === COMPACT_VIEWPORT_QUERY,
-  media: query,
-  onchange: null,
-  addListener: () => {},
-  removeListener: () => {},
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  dispatchEvent: () => false,
-});
-window.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
-Element.prototype.scrollIntoView ??= () => {};
+installBrowserMocks({ compactViewport: true });
 
 // loadPluginApp installs the fake SDK runtime; nothing SDK-touching may be
 // imported before it runs.

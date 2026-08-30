@@ -398,19 +398,19 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
                        parents only. Same token family as the row dividers.
                        The rail is also the parent's collapse control, so a long
                        block can be closed from its foot without scrolling back
-                       up to the chevron. It is hidden from assistive tech and
-                       out of the tab order: the chevron above already announces
-                       this exact action, and a second stop would say it twice.
+                       up to the chevron. It is a plain div, not a button: the
+                       chevron above already announces this exact action, so the
+                       rail is hidden from assistive tech and must not be
+                       focusable at all — a focusable element absent from the
+                       accessibility tree is a trap.
                        Its width holds the indent the old ml-3.5 + border + pl-3
                        produced, so subtask titles keep their alignment. */
                     <div className="flex">
-                      <button
-                        type="button"
+                      <div
                         data-subtask-rail={task.key}
                         aria-hidden
-                        tabIndex={-1}
                         onClick={() => toggleExpanded(task.id)}
-                        className="ml-3.5 w-[13px] shrink-0 border-l border-border-hairline hover:bg-state-active"
+                        className="ml-3.5 w-[13px] shrink-0 cursor-pointer border-l border-border-hairline hover:bg-state-active"
                       />
                       <div className="min-w-0 flex-1">
                         {children.map((child) => (

@@ -2,27 +2,11 @@
 import { cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import { COMPACT_VIEWPORT_QUERY } from "@/components/ui/hooks/use-compact-viewport";
 import type { Task } from "../../shared/contract.js";
 import { LIST_PREFERENCE_STORAGE_KEY } from "./list-preference.js";
+import { installBrowserMocks } from "./browser-mocks.js";
 
-// Compact viewport so sort/filter menus render as clickable drawers in jsdom.
-window.matchMedia = (query: string) => ({
-  matches: query === COMPACT_VIEWPORT_QUERY,
-  media: query,
-  onchange: null,
-  addListener: () => {},
-  removeListener: () => {},
-  addEventListener: () => {},
-  removeEventListener: () => {},
-  dispatchEvent: () => false,
-});
-window.ResizeObserver ??= class {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-};
-Element.prototype.scrollIntoView ??= () => {};
+installBrowserMocks({ compactViewport: true });
 
 const app = await loadPluginApp(() => import("../../app"));
 
