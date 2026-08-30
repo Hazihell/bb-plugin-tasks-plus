@@ -308,31 +308,34 @@ async function resolveProject(
   return project;
 }
 
-interface ProjectSelection {
-  project: Project | undefined;
-  created: boolean;
-}
+type ProjectSelectionMode = "create-if-missing" | "optional";
+
+type ProjectSelection =
+  | { kind: "all" }
+  | { kind: "none" }
+  | { kind: "project"; project: Project; created: boolean };
 
 async function defaultProject(
   bb: BbPluginApi,
   domain: TasksDomain,
   ctx: PluginCliContext,
-  required: boolean,
+  mode: ProjectSelectionMode,
+  onProjectCreated?: (project: Project) => void,
 ): Promise<ProjectSelection> {
   if (!ctx.projectId) {
-    if (required) {
+    if (mode === "create-if-missing") {
       throw new CliError(
         "missing --project and no BB project context is available",
       );
     }
-    return { project: undefined, created: false };
+    return { kind: "all" };
   }
   const projects = await listProjects(domain);
   const matches = projects.filter(
     (project) => project.linkedBbProjectId === ctx.projectId,
   );
   if (matches.length === 0) {
-    if (required) {
+    if (mode === "create-if-missing") {
       const bbProject = await bb.sdk.projects.get({
         projectId: ctx.projectId,
       });
@@ -347,16 +350,17 @@ async function defaultProject(
           }),
         ),
       );
-      return { project: result.project, created: true };
+      onProjectCreated?.(result.project);
+      return { kind: "project", project: result.project, created: true };
     }
-    return { project: undefined, created: false };
+    return { kind: "none" };
   }
   if (matches.length > 1) {
     throw new CliError(
       `multiple tracker projects are linked to BB project ${ctx.projectId}; pass --project explicitly`,
     );
   }
-  return { project: matches[0], created: false };
+  return { kind: "project", project: matches[0], created: false };
 }
 
 async function selectedProject(
@@ -364,11 +368,16 @@ async function selectedProject(
   domain: TasksDomain,
   ctx: PluginCliContext,
   address: string | undefined,
-  required: boolean,
+  mode: ProjectSelectionMode,
+  onProjectCreated?: (project: Project) => void,
 ): Promise<ProjectSelection> {
   return address
-    ? { project: await resolveProject(domain, address), created: false }
-    : defaultProject(bb, domain, ctx, required);
+    ? {
+        kind: "project",
+        project: await resolveProject(domain, address),
+        created: false,
+      }
+    : defaultProject(bb, domain, ctx, mode, onProjectCreated);
 }
 
 async function resolveFolder(
@@ -935,136 +944,147 @@ async function runCreate(
   ctx: PluginCliContext,
   argv: string[],
 ): Promise<string | PluginCliResult> {
-  const args = parseArgs(argv);
-  if (args.flags.has("help")) return CREATE_HELP;
-  assertAllowed(args, [
-    "project",
-    "title",
-    "description",
-    "description-file",
-    "priority",
-    "label",
-    "due",
-    "parent",
-    "attach",
-    "machine",
-  ]);
-  requirePositionals(args, 0, CREATE_HELP);
-  // Read every attachment source up front so a bad path (or a source over
-  // the daemon's transfer limit) cannot leave behind a half-built task.
-  const attachPaths = options(args, "attach").map((path) =>
-    resolve(ctx.cwd ?? process.cwd(), path),
-  );
-  const usesClientFiles =
-    attachPaths.length > 0 || option(args, "description-file") !== undefined;
-  if (option(args, "machine") !== undefined && !usesClientFiles) {
-    throw new CliError("--machine requires --attach or --description-file");
-  }
-  const clientHostId = usesClientFiles
-    ? await resolveClientHostId(bb, domain, args, ctx)
-    : undefined;
-  const attachSources: Array<{ path: string; bytes: Buffer }> = [];
-  for (const path of attachPaths) {
-    attachSources.push({
-      path,
-      bytes: await readAttachmentSource(bb, clientHostId, path),
-    });
-  }
-  const selection = await selectedProject(
-    bb,
-    domain,
-    ctx,
-    option(args, "project"),
-    true,
-  );
-  const project = selection.project;
-  if (!project) throw new CliError("project is required");
-  const labels = await projectLabels(domain, project.id);
-  const labelIds = options(args, "label").map(
-    (name) => resolveLabel(labels, name).id,
-  );
-  const parentAddress = option(args, "parent");
-  const parent = parentAddress
-    ? await resolveTask(domain, parentAddress)
-    : undefined;
-  const input = tasksRpcContract.createTask.input.parse({
-    projectId: project.id,
-    title: requireOption(args, "title"),
-    description:
-      (await readFileOption(
-        bb,
-        args,
-        ctx,
-        clientHostId,
-        "description",
-        "description-file",
-      )) ?? "",
-    priority: option(args, "priority") ?? "none",
-    dueDate: option(args, "due") ?? null,
-    parentTaskId: parent?.id ?? null,
-    labelIds,
-  });
-  const task = unwrapTask(
-    tasksRpcContract.createTask.output.parse(await domain.createTask(input)),
-  );
-  // The task exists now, so every file gets attempted and truthfully
-  // reported; stopping at the first failure would hide the rest.
-  const attachments: Attachment[] = [];
-  const failedAttachments: Array<{ path: string; error: string }> = [];
-  for (const source of attachSources) {
-    try {
-      const attachment = await saveAttachmentFromBytes(
-        store.tasks,
-        source.bytes,
-        {
-          taskId: task.id,
-          fileName: attachmentFileName(source.path),
-        },
-      );
-      publishAttachmentChanged(bb, store.tasks, attachment);
-      attachments.push(attachment);
-    } catch (error) {
-      failedAttachments.push({
-        path: source.path,
-        error: error instanceof Error ? error.message : String(error),
+  let createdProjectNotice: string | undefined;
+  try {
+    const args = parseArgs(argv);
+    if (args.flags.has("help")) return CREATE_HELP;
+    assertAllowed(args, [
+      "project",
+      "title",
+      "description",
+      "description-file",
+      "priority",
+      "label",
+      "due",
+      "parent",
+      "attach",
+      "machine",
+    ]);
+    requirePositionals(args, 0, CREATE_HELP);
+    // Read every attachment source up front so a bad path (or a source over
+    // the daemon's transfer limit) cannot leave behind a half-built task.
+    const attachPaths = options(args, "attach").map((path) =>
+      resolve(ctx.cwd ?? process.cwd(), path),
+    );
+    const usesClientFiles =
+      attachPaths.length > 0 || option(args, "description-file") !== undefined;
+    if (option(args, "machine") !== undefined && !usesClientFiles) {
+      throw new CliError("--machine requires --attach or --description-file");
+    }
+    const clientHostId = usesClientFiles
+      ? await resolveClientHostId(bb, domain, args, ctx)
+      : undefined;
+    const attachSources: Array<{ path: string; bytes: Buffer }> = [];
+    for (const path of attachPaths) {
+      attachSources.push({
+        path,
+        bytes: await readAttachmentSource(bb, clientHostId, path),
       });
     }
+    const selection = await selectedProject(
+      bb,
+      domain,
+      ctx,
+      option(args, "project"),
+      "create-if-missing",
+      (project) => {
+        createdProjectNotice = `Created and linked tracker project "${project.name}" (${project.prefix}) to BB project ${ctx.projectId}`;
+      },
+    );
+    if (selection.kind !== "project") {
+      throw new CliError("project is required");
+    }
+    const project = selection.project;
+    const labels = await projectLabels(domain, project.id);
+    const labelIds = options(args, "label").map(
+      (name) => resolveLabel(labels, name).id,
+    );
+    const parentAddress = option(args, "parent");
+    const parent = parentAddress
+      ? await resolveTask(domain, parentAddress)
+      : undefined;
+    const input = tasksRpcContract.createTask.input.parse({
+      projectId: project.id,
+      title: requireOption(args, "title"),
+      description:
+        (await readFileOption(
+          bb,
+          args,
+          ctx,
+          clientHostId,
+          "description",
+          "description-file",
+        )) ?? "",
+      priority: option(args, "priority") ?? "none",
+      dueDate: option(args, "due") ?? null,
+      parentTaskId: parent?.id ?? null,
+      labelIds,
+    });
+    const task = unwrapTask(
+      tasksRpcContract.createTask.output.parse(await domain.createTask(input)),
+    );
+    // The task exists now, so every file gets attempted and truthfully
+    // reported; stopping at the first failure would hide the rest.
+    const attachments: Attachment[] = [];
+    const failedAttachments: Array<{ path: string; error: string }> = [];
+    for (const source of attachSources) {
+      try {
+        const attachment = await saveAttachmentFromBytes(
+          store.tasks,
+          source.bytes,
+          {
+            taskId: task.id,
+            fileName: attachmentFileName(source.path),
+          },
+        );
+        publishAttachmentChanged(bb, store.tasks, attachment);
+        attachments.push(attachment);
+      } catch (error) {
+        failedAttachments.push({
+          path: source.path,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    const stdout = args.flags.has("json")
+      ? JSON.stringify({ task, attachments, failedAttachments })
+      : [
+          `Created ${task.key}  ${task.title}`,
+          ...attachments.map(
+            (attachment) => `Attached ${attachment.fileName}  ${attachment.id}`,
+          ),
+          ...failedAttachments.map(
+            (failure) => `Failed to attach ${failure.path}: ${failure.error}`,
+          ),
+          ...(failedAttachments.length > 0
+            ? failedAttachments.map(
+                (failure) =>
+                  `Retry with: bb tasks-plus attachment add ${task.key} --file ${failure.path}`,
+              )
+            : []),
+        ].join("\n");
+    if (failedAttachments.length === 0) {
+      return createdProjectNotice
+        ? { exitCode: 0, stdout, stderr: createdProjectNotice }
+        : stdout;
+    }
+    return {
+      exitCode: 1,
+      stdout,
+      stderr: [
+        createdProjectNotice,
+        `created ${task.key}, but ${failedAttachments.length} of ${attachPaths.length} attachments failed; see stdout for per-file recovery commands`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    };
+  } catch (error) {
+    if (!createdProjectNotice) throw error;
+    return {
+      exitCode: 1,
+      stderr: [createdProjectNotice, friendlyError(error)].join("\n"),
+    };
   }
-  const stdout = args.flags.has("json")
-    ? JSON.stringify({ task, attachments, failedAttachments })
-    : [
-        `Created ${task.key}  ${task.title}`,
-        ...attachments.map(
-          (attachment) => `Attached ${attachment.fileName}  ${attachment.id}`,
-        ),
-        ...failedAttachments.map(
-          (failure) => `Failed to attach ${failure.path}: ${failure.error}`,
-        ),
-        ...(failedAttachments.length > 0
-          ? failedAttachments.map(
-              (failure) =>
-                `Retry with: bb tasks-plus attachment add ${task.key} --file ${failure.path}`,
-            )
-          : []),
-      ].join("\n");
-  const createdProjectNotice = selection.created
-    ? `Created and linked tracker project "${project.name}" (${project.prefix}) to BB project ${ctx.projectId}`
-    : undefined;
-  if (failedAttachments.length === 0) {
-    return createdProjectNotice
-      ? { exitCode: 0, stdout, stderr: createdProjectNotice }
-      : stdout;
-  }
-  return {
-    exitCode: 1,
-    stdout,
-    stderr: [
-      createdProjectNotice,
-      `created ${task.key}, but ${failedAttachments.length} of ${attachPaths.length} attachments failed; see stdout for per-file recovery commands`,
-    ]
-      .filter(Boolean)
-      .join("\n"),
-  };
 }
 
 async function labelsForTaskList(
@@ -1110,14 +1130,20 @@ async function runList(
       `invalid sort: ${sortOption} (${TASK_SORTS.join(", ")})`,
     );
   }
-  const { project } = await selectedProject(
+  const selection = await selectedProject(
     bb,
     domain,
     ctx,
     option(args, "project"),
-    false,
+    "optional",
   );
-  const projects = project ? [project] : await listProjects(domain);
+  const project = selection.kind === "project" ? selection.project : undefined;
+  const projects =
+    selection.kind === "project"
+      ? [selection.project]
+      : selection.kind === "all"
+        ? await listProjects(domain)
+        : [];
   const labelById = await labelsForTaskList(domain, projects);
   const requestedLabels = options(args, "label");
   const labelIds = requestedLabels.map((name) => {
@@ -1132,27 +1158,30 @@ async function runList(
     }
     return matches[0]!.id;
   });
-  const result = tasksRpcContract.listTasks.output.parse(
-    await domain.listTasks(
-      tasksRpcContract.listTasks.input.parse({
-        projectId: project?.id,
-        statuses:
-          options(args, "status").length > 0
-            ? options(args, "status")
-            : undefined,
-        priorities:
-          options(args, "priority").length > 0
-            ? options(args, "priority")
-            : undefined,
-        labelIds: labelIds.length > 0 ? labelIds : undefined,
-        activeOnly: args.flags.has("active"),
-        search: option(args, "search"),
-        sort,
-        limit: taskPageLimit(args),
-        cursor: option(args, "cursor"),
-      }),
-    ),
-  );
+  const result =
+    selection.kind === "none"
+      ? { tasks: [], nextCursor: null }
+      : tasksRpcContract.listTasks.output.parse(
+          await domain.listTasks(
+            tasksRpcContract.listTasks.input.parse({
+              projectId: project?.id,
+              statuses:
+                options(args, "status").length > 0
+                  ? options(args, "status")
+                  : undefined,
+              priorities:
+                options(args, "priority").length > 0
+                  ? options(args, "priority")
+                  : undefined,
+              labelIds: labelIds.length > 0 ? labelIds : undefined,
+              activeOnly: args.flags.has("active"),
+              search: option(args, "search"),
+              sort,
+              limit: taskPageLimit(args),
+              cursor: option(args, "cursor"),
+            }),
+          ),
+        );
   const tasks = [];
   for (const task of result.tasks) {
     const threadResult = tasksRpcContract.listTaskThreads.output.parse(

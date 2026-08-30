@@ -746,12 +746,90 @@ describe("bb tasks-plus CLI", () => {
     });
     await plugin(bb);
 
+    stdout(
+      await harness.runCli([
+        "project",
+        "create",
+        "--name",
+        "Other project",
+        "--prefix",
+        "OTHER",
+      ]),
+    );
+    stdout(
+      await harness.runCli([
+        "create",
+        "--project",
+        "OTHER",
+        "--title",
+        "Other project's task",
+      ]),
+    );
+    expect(
+      JSON.parse(
+        stdout(await harness.runCli(["list", "--project", "OTHER", "--json"])),
+      ).tasks,
+    ).toEqual([expect.objectContaining({ title: "Other project's task" })]);
+
     const result = await harness.runCli(["list", "--json"], {
       projectId: "proj_untracked",
     });
     expect(result).toMatchObject({ exitCode: 0, stderr: "" });
     expect(JSON.parse(result.stdout)).toMatchObject({ tasks: [] });
     expect(harness.sdk.callsTo("projects.get")).toEqual([]);
+
+    await harness.dispose();
+  });
+
+  it("reports an auto-created project when task creation fails afterward", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        projects: {
+          get: async ({ projectId }) => ({
+            id: projectId,
+            name: "Failed BB Project",
+            kind: "standard",
+            sources: [],
+            gitRemoteUrl: null,
+            createdAt: 0,
+            updatedAt: 0,
+          }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const failingStore = {
+      ...store,
+      tasks: {
+        ...store.tasks,
+        createTask() {
+          throw new Error("simulated task creation failure");
+        },
+      },
+    };
+    registerTasksCli(bb, failingStore, { name: "tasks", version: "test" });
+
+    const result = await harness.runCli(
+      ["create", "--title", "Will fail", "--json"],
+      { projectId: "proj_failed" },
+    );
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      stdout: "",
+    });
+    expect(result.stderr).toContain(
+      'Created and linked tracker project "Failed BB Project" (FBP) to BB project proj_failed',
+    );
+    expect(result.stderr).toContain("simulated task creation failure");
+    expect(store.tasks.listProjects()).toEqual([
+      expect.objectContaining({
+        name: "Failed BB Project",
+        prefix: "FBP",
+        linkedBbProjectId: "proj_failed",
+      }),
+    ]);
 
     await harness.dispose();
   });
