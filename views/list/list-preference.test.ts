@@ -37,14 +37,17 @@ describe("sanitizeListPreference", () => {
     expect(sanitizeListPreference(undefined)).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
     expect(sanitizeListPreference(null)).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
     expect(sanitizeListPreference("nope")).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
   });
 
@@ -57,6 +60,7 @@ describe("sanitizeListPreference", () => {
           labelNames: [" Bug ", "", "Bug", "Feature", 12],
         },
         sort: "priority-please",
+        collapsedStatuses: [],
       }),
     ).toEqual({
       filters: {
@@ -65,7 +69,25 @@ describe("sanitizeListPreference", () => {
         labelNames: ["Bug", "Feature"],
       },
       sort: "manual",
+      collapsedStatuses: [],
     });
+  });
+
+  it("keeps known collapsed statuses and drops the rest", () => {
+    expect(
+      sanitizeListPreference({
+        filters: { statuses: [], priorities: [], labelNames: [] },
+        sort: "manual",
+        collapsedStatuses: ["backlog", "nope", 7, "backlog", "done"],
+      }).collapsedStatuses,
+    ).toEqual(["backlog", "done"]);
+    // A document written before the field shipped reads as nothing collapsed.
+    expect(
+      sanitizeListPreference({
+        filters: { statuses: [], priorities: [], labelNames: [] },
+        sort: "manual",
+      }).collapsedStatuses,
+    ).toEqual([]);
   });
 
   it("accepts a valid preference and known sort modes", () => {
@@ -77,6 +99,7 @@ describe("sanitizeListPreference", () => {
           labelNames: ["infra"],
         },
         sort: "due",
+        collapsedStatuses: [],
       }),
     ).toEqual({
       filters: {
@@ -85,6 +108,7 @@ describe("sanitizeListPreference", () => {
         labelNames: ["infra"],
       },
       sort: "due",
+      collapsedStatuses: [],
     });
   });
 });
@@ -94,6 +118,7 @@ describe("loadListPreference / storeListPreference", () => {
     expect(loadListPreference("all")).toEqual({
       filters: { ...DEFAULT_LIST_PREFERENCE.filters },
       sort: "manual",
+      collapsedStatuses: [],
     });
   });
 
@@ -105,6 +130,7 @@ describe("loadListPreference / storeListPreference", () => {
         labelNames: ["Bug"],
       },
       sort: "priority",
+      collapsedStatuses: [],
     });
     storeListPreference("project:p1", {
       filters: {
@@ -113,6 +139,7 @@ describe("loadListPreference / storeListPreference", () => {
         labelNames: [],
       },
       sort: "due",
+      collapsedStatuses: [],
     });
 
     expect(loadListPreference("all")).toEqual({
@@ -122,6 +149,7 @@ describe("loadListPreference / storeListPreference", () => {
         labelNames: ["Bug"],
       },
       sort: "priority",
+      collapsedStatuses: [],
     });
     expect(loadListPreference("project:p1")).toEqual({
       filters: {
@@ -130,10 +158,12 @@ describe("loadListPreference / storeListPreference", () => {
         labelNames: [],
       },
       sort: "due",
+      collapsedStatuses: [],
     });
     expect(loadListPreference("active")).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
 
     const stored = JSON.parse(
@@ -143,18 +173,70 @@ describe("loadListPreference / storeListPreference", () => {
     expect(Object.keys(stored.scopes).sort()).toEqual(["all", "project:p1"]);
   });
 
+  it("round-trips the collapsed status set per scope", () => {
+    storeListPreference("all", {
+      filters: { statuses: [], priorities: [], labelNames: [] },
+      sort: "manual",
+      collapsedStatuses: ["backlog", "done"],
+    });
+    storeListPreference("project:p1", {
+      filters: { statuses: [], priorities: [], labelNames: [] },
+      sort: "manual",
+      collapsedStatuses: ["canceled"],
+    });
+    expect(loadListPreference("all").collapsedStatuses).toEqual([
+      "backlog",
+      "done",
+    ]);
+    expect(loadListPreference("project:p1").collapsedStatuses).toEqual([
+      "canceled",
+    ]);
+    expect(loadListPreference("active").collapsedStatuses).toEqual([]);
+
+    // Expanding every group again is a state worth persisting, not a reset.
+    storeListPreference("all", {
+      filters: { statuses: [], priorities: [], labelNames: [] },
+      sort: "manual",
+      collapsedStatuses: [],
+    });
+    expect(loadListPreference("all").collapsedStatuses).toEqual([]);
+  });
+
+  it("reads a stored document written without the collapsed field", () => {
+    window.localStorage.setItem(
+      LIST_PREFERENCE_STORAGE_KEY,
+      JSON.stringify({
+        version: LIST_PREFERENCE_VERSION,
+        scopes: {
+          all: {
+            filters: { statuses: ["todo"], priorities: [], labelNames: [] },
+            sort: "due",
+          },
+        },
+      }),
+    );
+    expect(loadListPreference("all")).toEqual({
+      filters: { statuses: ["todo"], priorities: [], labelNames: [] },
+      sort: "due",
+      collapsedStatuses: [],
+    });
+  });
+
   it("persists an explicit clear (empty filters + manual sort)", () => {
     storeListPreference("all", {
       filters: { statuses: ["todo"], priorities: [], labelNames: [] },
       sort: "priority",
+      collapsedStatuses: [],
     });
     storeListPreference("all", {
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
     expect(loadListPreference("all")).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
   });
 
@@ -183,6 +265,7 @@ describe("loadListPreference / storeListPreference", () => {
     expect(loadListPreference("all")).toEqual({
       filters: { statuses: [], priorities: ["high"], labelNames: [] },
       sort: "priority",
+      collapsedStatuses: [],
     });
   });
 
@@ -201,10 +284,12 @@ describe("loadListPreference / storeListPreference", () => {
     expect(loadListPreference("all")).toEqual({
       filters: { statuses: ["todo"], priorities: [], labelNames: [] },
       sort: "due",
+      collapsedStatuses: [],
     });
     storeListPreference("all", {
       filters: { statuses: ["done"], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
     // Older client must not down-convert a newer document.
     expect(window.localStorage.getItem(LIST_PREFERENCE_STORAGE_KEY)).toBe(
@@ -220,6 +305,7 @@ describe("loadListPreference / storeListPreference", () => {
       storeListPreference("all", {
         filters: { statuses: ["todo"], priorities: [], labelNames: [] },
         sort: "manual",
+        collapsedStatuses: [],
       }),
     ).not.toThrow();
   });
@@ -231,6 +317,7 @@ describe("loadListPreference / storeListPreference", () => {
     expect(loadListPreference("all")).toEqual({
       filters: { statuses: [], priorities: [], labelNames: [] },
       sort: "manual",
+      collapsedStatuses: [],
     });
   });
 });

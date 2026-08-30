@@ -23,11 +23,20 @@ type ListPreferenceScope = "all" | "active" | `project:${string}`;
 export interface ListPreference {
   filters: ListFilterState;
   sort: TaskSort;
+  /**
+   * Status groups whose rows the user has hidden. Stored per scope like the
+   * rest, so hiding Backlog and Done in one project says nothing about
+   * another. Absent in documents written before this field shipped, which
+   * read as "nothing collapsed" — additive, so the version stays at 1 and no
+   * older document is discarded.
+   */
+  collapsedStatuses: TaskStatus[];
 }
 
 export const DEFAULT_LIST_PREFERENCE: ListPreference = {
   filters: EMPTY_FILTERS,
   sort: "manual",
+  collapsedStatuses: [],
 };
 
 interface StoredDocumentV1 {
@@ -103,12 +112,17 @@ function sanitizeSort(value: unknown): TaskSort {
   return DEFAULT_LIST_PREFERENCE.sort;
 }
 
+function defaultPreference(): ListPreference {
+  return {
+    filters: { ...EMPTY_FILTERS },
+    sort: DEFAULT_LIST_PREFERENCE.sort,
+    collapsedStatuses: [],
+  };
+}
+
 export function sanitizeListPreference(raw: unknown): ListPreference {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return {
-      filters: { ...EMPTY_FILTERS },
-      sort: DEFAULT_LIST_PREFERENCE.sort,
-    };
+    return defaultPreference();
   }
   const record = raw as Record<string, unknown>;
   const filtersRaw =
@@ -125,6 +139,7 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
       labelNames: uniqueLabelNames(filtersRaw.labelNames),
     },
     sort: sanitizeSort(record.sort),
+    collapsedStatuses: uniqueValidStatuses(record.collapsedStatuses),
   };
 }
 
@@ -181,12 +196,7 @@ function readStorage(): ParsedStorage | null {
 
 export function loadListPreference(scope: ListPreferenceScope): ListPreference {
   const document = readStorage();
-  if (document === null) {
-    return {
-      filters: { ...EMPTY_FILTERS },
-      sort: DEFAULT_LIST_PREFERENCE.sort,
-    };
-  }
+  if (document === null) return defaultPreference();
   return sanitizeListPreference(document.scopes[scope]);
 }
 

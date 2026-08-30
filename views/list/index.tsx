@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Label, Task } from "../../shared/contract.js";
+import type { Label, Task, TaskStatus } from "../../shared/contract.js";
 import { useProjects } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/new-task-dialog.js";
@@ -108,20 +108,34 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   }, [preferenceScope]);
   const filters = preference.filters;
   const sort = preference.sort;
+  const isCollapsed = (status: TaskStatus) =>
+    preference.collapsedStatuses.includes(status);
   const setFilters = (next: ListFilterState) => {
-    setPreference((current) => {
-      const updated: ListPreference = { filters: next, sort: current.sort };
-      storeListPreference(preferenceScope, updated);
-      return updated;
-    });
+    updatePreference((current) => ({ ...current, filters: next }));
   };
   const setSort = (next: TaskSort) => {
+    updatePreference((current) => ({ ...current, sort: next }));
+  };
+  // Whether a status group shows its rows is a preference, not a reading
+  // posture: hiding Backlog and Done should still hold after a reload, per
+  // list surface, exactly like the filters and the sort above it.
+  const toggleStatusCollapsed = (status: TaskStatus) => {
+    updatePreference((current) => ({
+      ...current,
+      collapsedStatuses: current.collapsedStatuses.includes(status)
+        ? current.collapsedStatuses.filter((value) => value !== status)
+        : [...current.collapsedStatuses, status],
+    }));
+  };
+  function updatePreference(
+    next: (current: ListPreference) => ListPreference,
+  ): void {
     setPreference((current) => {
-      const updated: ListPreference = { filters: current.filters, sort: next };
+      const updated = next(current);
       storeListPreference(preferenceScope, updated);
       return updated;
     });
-  };
+  }
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // Parent whose "New subtask" menu item was chosen; drives the second dialog.
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null);
@@ -335,49 +349,79 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
           card); do not use surface-scrim or hardcoded colors here.
           Hairline bottom border separates the pin band from scrolling rows
           (same token family as the filter bar and row dividers).
+          The whole bar is the collapse control, and its hover cue deliberately
+          stays off the fill: a translucent state token here would let rows
+          show through the stuck bar. The chevron brightening carries it.
         */}
-        <div
+        <button
+          type="button"
           data-status-group-header={group.status}
-          className="sticky top-0 z-20 isolate flex items-center gap-2 border-b border-border-hairline bg-background px-3.5 pb-1.5 pt-2.5 text-sm font-semibold"
+          aria-expanded={!isCollapsed(group.status)}
+          onClick={() => toggleStatusCollapsed(group.status)}
+          className="group sticky top-0 z-20 isolate flex w-full items-center gap-2 border-b border-border-hairline bg-background px-3.5 pb-1.5 pt-2.5 text-left text-sm font-semibold focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
         >
+          <Icon
+            aria-hidden
+            name={isCollapsed(group.status) ? "ChevronRight" : "ChevronDown"}
+            className="size-3.5 shrink-0 text-subtle-foreground transition-colors group-hover:text-foreground"
+          />
           <StatusIcon status={group.status} />
           {STATUS_LABELS[group.status]}
           <span className="text-xs font-normal tabular-nums text-subtle-foreground">
             {group.tasks.length}
           </span>
-        </div>
-        {group.tasks.map((task) => {
-          const children = tree.childrenByParent.get(task.id) ?? [];
-          const expanded = expandedParents.has(task.id);
-          return (
-            <div key={task.id}>
-              <TaskRow
-                {...rowProps(task)}
-                {...(children.length > 0
-                  ? {
-                      expansion: {
-                        childCount: children.length,
-                        expanded,
-                        onToggle: () => toggleExpanded(task.id),
-                      },
-                    }
-                  : {})}
-                onNewSubtask={() => setSubtaskParent(task)}
-              />
-              {expanded && children.length > 0 ? (
-                /* Subtasks live in their parent's group whatever their own
-                   status, so the nested block is indented behind a hairline
-                   rail: the cue that the header above it counts and claims
-                   parents only. Same token family as the row dividers. */
-                <div className="ml-3.5 border-l border-border-hairline pl-3">
-                  {children.map((child) => (
-                    <TaskRow key={child.id} {...rowProps(child)} />
-                  ))}
+        </button>
+        {isCollapsed(group.status)
+          ? null
+          : group.tasks.map((task) => {
+              const children = tree.childrenByParent.get(task.id) ?? [];
+              const expanded = expandedParents.has(task.id);
+              return (
+                <div key={task.id}>
+                  <TaskRow
+                    {...rowProps(task)}
+                    {...(children.length > 0
+                      ? {
+                          expansion: {
+                            childCount: children.length,
+                            expanded,
+                            onToggle: () => toggleExpanded(task.id),
+                          },
+                        }
+                      : {})}
+                    onNewSubtask={() => setSubtaskParent(task)}
+                  />
+                  {expanded && children.length > 0 ? (
+                    /* Subtasks live in their parent's group whatever their own
+                       status, so the nested block is indented behind a hairline
+                       rail: the cue that the header above it counts and claims
+                       parents only. Same token family as the row dividers.
+                       The rail is also the parent's collapse control, so a long
+                       block can be closed from its foot without scrolling back
+                       up to the chevron. It is hidden from assistive tech and
+                       out of the tab order: the chevron above already announces
+                       this exact action, and a second stop would say it twice.
+                       Its width holds the indent the old ml-3.5 + border + pl-3
+                       produced, so subtask titles keep their alignment. */
+                    <div className="flex">
+                      <button
+                        type="button"
+                        data-subtask-rail={task.key}
+                        aria-hidden
+                        tabIndex={-1}
+                        onClick={() => toggleExpanded(task.id)}
+                        className="ml-3.5 w-[13px] shrink-0 border-l border-border-hairline hover:bg-state-active"
+                      />
+                      <div className="min-w-0 flex-1">
+                        {children.map((child) => (
+                          <TaskRow key={child.id} {...rowProps(child)} />
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          );
-        })}
+              );
+            })}
       </section>
     ));
   }

@@ -161,6 +161,14 @@ export interface RowExpansion {
  * subtasks renders the chevron. Like the property editors it sits at z-10, or
  * the stretched open overlay (inset-0) would swallow the click and navigate
  * instead of toggling.
+ *
+ * The chevron stays a 16px glyph, but its hit area is a pseudo-element
+ * stretched over the whole leading column of the row — the row's left padding
+ * plus the gutter, over its full height — so a thumb can find it. The
+ * pseudo-element resolves against the row (hence no `relative` here, z-index
+ * still applies to a flex/grid item), which is what keeps the target the row's
+ * real height in both the desktop and the two-line layout. Nothing moves: the
+ * button itself is still 16px in flow.
  */
 function ExpandToggle({
   task,
@@ -182,7 +190,7 @@ function ExpandToggle({
         expansion.childCount,
       )} of ${task.key}`}
       onClick={expansion.onToggle}
-      className="relative z-10 col-start-1 row-start-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-subtle-foreground hover:bg-state-active focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      className="z-10 col-start-1 row-start-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-subtle-foreground before:absolute before:inset-y-0 before:left-0 before:w-[1.875rem] hover:bg-state-active focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
       <Icon
         name={expansion.expanded ? "ChevronDown" : "ChevronRight"}
@@ -255,10 +263,7 @@ export function TaskRow({
           pending && "opacity-70",
         )}
       >
-        <ExpandToggle
-          task={task}
-          {...(expansion ? { expansion } : {})}
-        />
+        <ExpandToggle task={task} {...(expansion ? { expansion } : {})} />
         <button
           type="button"
           aria-label={`Open ${task.key}: ${task.title}`}
