@@ -164,28 +164,22 @@ it. A task may be blocked by a task in another project.
 
 Skills that speak of "the issue tracker", "publishing an issue", "fetching a
 ticket", or triage labels mean Tasks Plus — unless the repo carries its own
-`docs/agents/issue-tracker.md`, which wins where it exists.
+`docs/agents/issue-tracker.md`, which wins where it exists. An issue number is a
+task key such as `ABC-12`.
 
-| The skill says | Do this |
-| --- | --- |
-| publish an issue, PRD, or spec | `bb tasks-plus create --title <title> --description-file <path>` |
-| fetch the ticket | `bb tasks-plus show <key>`, `--json` when it drives commands |
-| a **Parent** section referencing another ticket | pass `--parent <key>`; do not write the reference into the body |
-| a **Blocked by** section | run `bb tasks-plus blocker add <task> <blocker>`; do not write the reference into the body |
-| apply a triage label | `--label` on create, `--add-label` / `--remove-label` on update |
-| the issue number or URL | the task key, such as `ABC-12` |
+Two things a skill writes as prose are relations here, and the relation is the
+record:
 
-Create parents before children and blockers before dependents, so the key
-already exists when the next command references it. Capture a new key with
-`--json | jq -r '.task.key'`.
+- a **Parent** section → `--parent <key>` on create
+- a **Blocked by** section → `bb tasks-plus blocker add <task> <blocker>`
 
-### Triage labels
+So create parents before children and blockers before dependents, and capture
+each new key with `--json | jq -r '.task.key'`.
 
-The five triage roles are labels, not statuses: `needs-triage`, `needs-info`,
-`ready-for-agent`, `ready-for-human`, `wontfix`. Statuses track the work itself
-and drive blocker resolution, so never overload them with triage state. Create a
-missing label with `bb tasks-plus label create --project <prefix> --name <name>`
-before applying it.
+The five triage roles — `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix` — are labels. Statuses track the work itself and
+drive blocker resolution, so they stay free of triage state. Create a missing
+label with `bb tasks-plus label create --project <prefix> --name <name>`.
 
 ## Link tasks in responses
 
