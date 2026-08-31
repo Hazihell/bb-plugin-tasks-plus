@@ -104,7 +104,8 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
    description image reference together with the row and blob.
 
    File paths (`--file`, `--attach`, `--out`, `--description-file`,
-   `--body-file`) are read from and written to the invoking machine: inside
+   `--body-file`, `--meta-file`) are read from and written to the invoking
+   machine: inside
    an agent thread that is the thread's machine, so local paths just work.
    Outside a thread they target the server's machine; pass
    `--machine <id-or-name>` to address files on another enrolled machine.
@@ -158,7 +159,8 @@ kind — pass a file, not shell-quoted JSON:
   (`YYYY-MM-DD`)
 - `decision` — `discovery`, `decision`, `why`, `impact`
 - `evidence` — `command`, `exitCode`, `evidenceKind` (`unit`, `integration`,
-  `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`)
+  `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`,
+  `security`, `manual`)
 - `review` — `baseRef`, `headSha`, `environmentId`, `concerns`
 - `review_result` — `verdict` (`pass`/`fail`/`mixed`), `findingCounts`
 

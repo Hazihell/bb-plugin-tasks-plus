@@ -2495,6 +2495,9 @@ describe("bb tasks-plus CLI", () => {
         },
         attachment: null,
       });
+      // The --json envelopes are a contract with the skills that read them, so
+      // pin the top-level keys, not just the values inside.
+      expect(Object.keys(added).sort()).toEqual(["artifact", "attachment"]);
 
       const humanAdd = stdout(
         await harness.runCli([
@@ -2529,6 +2532,7 @@ describe("bb tasks-plus CLI", () => {
       const everything = JSON.parse(
         stdout(await harness.runCli(["artifact", "list", "ART-1", "--json"])),
       );
+      expect(Object.keys(everything).sort()).toEqual(["artifacts", "task"]);
       expect(everything.task).toMatchObject({ key: "ART-1" });
       expect(
         everything.artifacts.map((artifact: { kind: string }) => artifact.kind),
@@ -2596,6 +2600,7 @@ describe("bb tasks-plus CLI", () => {
       expect(shownJson).toMatchObject({
         artifact: { id: decisionId, kind: "decision" },
       });
+      expect(Object.keys(shownJson)).toEqual(["artifact"]);
 
       const missing = await harness.runCli([
         "artifact",
@@ -2829,6 +2834,7 @@ describe("bb tasks-plus CLI", () => {
         deleted: true,
         artifact: { id: added.artifact.id, kind: "evidence" },
       });
+      expect(Object.keys(removed).sort()).toEqual(["artifact", "deleted"]);
 
       const again = await harness.runCli([
         "artifact",

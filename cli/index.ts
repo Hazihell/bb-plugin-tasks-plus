@@ -1866,16 +1866,29 @@ function parseArtifactKind(value: string): TaskArtifactKind {
   return value as TaskArtifactKind;
 }
 
+/**
+ * There is no getArtifact RPC, so the two single-artifact commands read the
+ * store directly, as the attachment owner lookup does. Storage types metadata
+ * loosely, so the row passes the contract schema exactly as the API handlers
+ * do before anything renders it.
+ */
+function resolveArtifact(
+  store: TasksApiStore,
+  address: string,
+): { id: string; artifact: TaskArtifact } {
+  const id = address.trim().toUpperCase();
+  const stored = store.tasks.getTaskArtifact(id);
+  if (!stored) throw new CliError(`artifact not found: ${address}`);
+  return { id, artifact: taskArtifactSchema.parse(stored) };
+}
+
 async function readArtifactMetadata(
   bb: BbPluginApi,
   args: ParsedArgs,
   ctx: PluginCliContext,
   clientHostId: string | undefined,
 ): Promise<unknown> {
-  // Every kind requires at least one metadata field, so an add without a
-  // metadata file could only ever fail in the schema. Requiring it here turns
-  // that into a usage error.
-  requireOption(args, "meta-file");
+  // The caller has already required --meta-file, ahead of any lookup.
   const text = await readFileOption(
     bb,
     args,
@@ -1942,8 +1955,13 @@ async function runArtifact(
       1,
       "bb tasks-plus artifact add <key> --kind <kind> --title <title> --meta-file <path> [--body <markdown> | --body-file <path>] [--url <url>] [--attach <path>] [--machine <id-or-name>] [--json]",
     );
-    // Before the task lookup, so an unknown kind never reaches the database.
+    // Before the task lookup, so neither an unknown kind nor a missing
+    // metadata file is masked by a task-resolution or machine error.
     const kind = parseArtifactKind(requireOption(args, "kind"));
+    // Every kind requires at least one metadata field, so an add without a
+    // metadata file could only ever fail in the schema. Requiring it here
+    // turns that into a usage error.
+    requireOption(args, "meta-file");
     const attachOption = option(args, "attach");
     // No --machine guard here: --meta-file is mandatory, so `add` always reads
     // a file from the invoking machine and --machine is never meaningless.
@@ -1966,7 +1984,7 @@ async function runArtifact(
       attachPath === undefined
         ? undefined
         : await readAttachmentSource(bb, clientHostId, attachPath);
-    const base = {
+    const inputWithoutAttachment = {
       taskId: task.id,
       kind,
       title: requireOption(args, "title"),
@@ -1983,7 +2001,7 @@ async function runArtifact(
       // Deliberate dry run, not redundant: the attachment has to exist before
       // the artifact can cite it, so validating everything else first keeps a
       // late schema failure from stranding an orphan attachment on the task.
-      tasksRpcContract.createArtifact.input.parse(base);
+      tasksRpcContract.createArtifact.input.parse(inputWithoutAttachment);
     }
     const attachment =
       attachBytes === undefined || attachPath === undefined
@@ -1996,7 +2014,7 @@ async function runArtifact(
     const result = tasksRpcContract.createArtifact.output.parse(
       await domain.createArtifact(
         tasksRpcContract.createArtifact.input.parse({
-          ...base,
+          ...inputWithoutAttachment,
           ...(attachment ? { attachmentId: attachment.id } : {}),
         }),
       ),
@@ -2051,14 +2069,7 @@ async function runArtifact(
       1,
       "bb tasks-plus artifact show <artifact-id> [--json]",
     );
-    // There is no getArtifact RPC; a single read goes straight to the store,
-    // as the attachment owner lookup does. Storage types metadata loosely, so
-    // the read passes the contract schema exactly as the API handlers do.
-    const stored = store.tasks.getTaskArtifact(
-      artifactId!.trim().toUpperCase(),
-    );
-    if (!stored) throw new CliError(`artifact not found: ${artifactId}`);
-    const artifact = taskArtifactSchema.parse(stored);
+    const { artifact } = resolveArtifact(store, artifactId!);
     return args.flags.has("json")
       ? JSON.stringify({ artifact })
       : artifactDetail(
@@ -2076,10 +2087,7 @@ async function runArtifact(
     );
     // Read first so the confirmation can name what was removed; the delete
     // RPC only reports whether a row went away.
-    const normalized = artifactId!.trim().toUpperCase();
-    const stored = store.tasks.getTaskArtifact(normalized);
-    if (!stored) throw new CliError(`artifact not found: ${artifactId}`);
-    const artifact = taskArtifactSchema.parse(stored);
+    const { artifact, id: normalized } = resolveArtifact(store, artifactId!);
     const result = tasksRpcContract.deleteArtifact.output.parse(
       await domain.deleteArtifact(
         tasksRpcContract.deleteArtifact.input.parse({
