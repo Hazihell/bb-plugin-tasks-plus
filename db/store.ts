@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import { BuiltinPresetError, seedBuiltinPresets } from "./builtin-presets";
 import { initializeTasksSchema } from "./schema";
 import {
   TASKS_PAGE_DEFAULT_LIMIT,
@@ -600,6 +601,7 @@ export function escapeLike(value: string): string {
 
 export function createTasksStore(db: PluginDatabase) {
   initializeTasksSchema(db);
+  seedBuiltinPresets(db);
 
   const getFolderRow = db.prepare<[string], FolderRow>(
     "SELECT * FROM folders WHERE id = ?",
@@ -2123,6 +2125,7 @@ export function createTasksStore(db: PluginDatabase) {
 
   function updatePreset(id: string, input: UpdatePresetInput): Preset {
     const current = requirePreset(id);
+    if (current.builtin) throw new BuiltinPresetError(current.name, "edited");
     const environment = validatePresetEnvironment({
       environmentKind: input.environmentKind ?? current.environmentKind,
       baseBranch:
@@ -2181,6 +2184,8 @@ export function createTasksStore(db: PluginDatabase) {
   }
 
   function deletePreset(id: string): boolean {
+    const current = getPreset(id);
+    if (current?.builtin) throw new BuiltinPresetError(current.name, "deleted");
     return (
       db.prepare<[string]>("DELETE FROM presets WHERE id = ?").run(id).changes >
       0

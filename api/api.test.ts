@@ -1092,40 +1092,71 @@ describe("Tasks RPC domain API", () => {
     await harness.dispose();
   });
 
-  it("allows legacy built-in rows to be renamed and deleted", async () => {
+  it("refuses builtin preset mutations while allowing custom preset mutations", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     const store = createStore(bb);
     registerTasksApi(bb, store);
-    const preset = store.tasks.createPreset({
-      name: "Sonnet · high",
-      providerId: "claude-code",
-      modelId: "claude-sonnet-5",
+    const preset = store.tasks
+      .listPresets()
+      .find((candidate) => candidate.name === "implement");
+    if (!preset) throw new Error("expected seeded implement preset");
+    const signalsBeforeRefusal = harness.realtimeSignals.length;
+
+    const updateAttempt = harness.callRpc("updatePreset", {
+      presetId: preset.id,
+      instructions: "changed",
+    });
+    await expect(updateAttempt).rejects.toMatchObject({
+      code: "handler_error",
+    });
+    await expect(updateAttempt).rejects.toThrow(/ships with the plugin/);
+    const deleteAttempt = harness.callRpc("deletePreset", {
+      presetId: preset.id,
+    });
+    await expect(deleteAttempt).rejects.toMatchObject({
+      code: "handler_error",
+    });
+    await expect(deleteAttempt).rejects.toThrow(/ships with the plugin/);
+    expect(harness.realtimeSignals).toHaveLength(signalsBeforeRefusal);
+    expect(store.tasks.getPreset(preset.id)).toMatchObject({
+      name: "implement",
+      builtin: true,
+    });
+
+    const custom = store.tasks.createPreset({
+      name: "Custom API preset",
+      providerId: "codex",
+      modelId: "gpt-5.6-sol",
       reasoningLevel: "high",
       serviceTier: null,
-      permissionMode: "full",
+      permissionMode: "accept-edits",
       environmentKind: "project-default",
       baseBranch: null,
       machineId: null,
       instructions: "",
-      builtin: true,
     });
-
     const updated = await harness.callRpc("updatePreset", {
-      presetId: preset.id,
-      name: "Renamed",
-      modelId: "claude-sonnet-6",
-      permissionMode: "accept-edits",
+      presetId: custom.id,
+      instructions: "updated",
     });
     expect(updated.preset).toMatchObject({
-      name: "Renamed",
-      modelId: "claude-sonnet-6",
-      permissionMode: "accept-edits",
-      builtin: true,
+      id: custom.id,
+      instructions: "updated",
+      builtin: false,
     });
     await expect(
-      harness.callRpc("deletePreset", { presetId: preset.id }),
+      harness.callRpc("deletePreset", { presetId: custom.id }),
     ).resolves.toEqual({ deleted: true });
-    expect(store.tasks.getPreset(preset.id)).toBeUndefined();
+    expect(store.tasks.getPreset(custom.id)).toBeUndefined();
+
+    const listed = await harness.callRpc("listPresets", null);
+    expect(listed.presets).toEqual([
+      expect.objectContaining({
+        id: preset.id,
+        name: "implement",
+        builtin: true,
+      }),
+    ]);
 
     await harness.dispose();
   });
