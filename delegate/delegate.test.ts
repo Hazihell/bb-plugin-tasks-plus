@@ -398,6 +398,66 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("seeds the dispatched worker with the task's own artifacts", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_artifacts" }),
+          get: async () =>
+            makeThreadResponse({ id: "thr_artifacts", status: "starting" }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Artifact delegation",
+      prefix: "ART",
+      color: "blue",
+      linkedBbProjectId: "proj_bb",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Carry the record forward",
+    });
+    const other = store.tasks.createTask({
+      projectId: project.id,
+      title: "Unrelated work",
+    });
+    const artifact = store.tasks.createTaskArtifact({
+      taskId: task.id,
+      kind: "decision",
+      title: "Formatter owns the cap",
+      metadata: {
+        discovery: "Manifests grew unbounded",
+        decision: "Cap each kind at ten",
+        why: "Seed prompts must stay bounded",
+        impact: "Older records need one CLI call",
+      },
+    });
+    store.tasks.createTaskArtifact({
+      taskId: other.id,
+      kind: "decision",
+      title: "Belongs to another task",
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await harness.callRpc("delegate", {
+      taskId: task.id,
+      presetId: preset.id,
+    });
+
+    const [[spawn]] = harness.sdk.callsTo("threads.spawn") as [
+      [{ prompt: string }],
+    ];
+    expect(spawn.prompt).toContain("### Decision");
+    expect(spawn.prompt).toContain(`- Formatter owns the cap · ${artifact.id}`);
+    expect(spawn.prompt).not.toContain("Belongs to another task");
+
+    await harness.dispose();
+  });
+
   it("self-attaches an existing thread through taskThreadsAttach", async () => {
     const { bb, harness } = createFakePluginHost({
       pluginId: "tasks",
@@ -602,6 +662,14 @@ describe("delegation seed prompt", () => {
         task,
         project,
         subtasks: [subtask],
+        artifacts: [
+          {
+            id: "01J00000000000000000000007",
+            kind: "approved_plan",
+            title: "Approved delegation plan",
+            createdAt: "2026-07-15T17:00:30.000Z",
+          },
+        ],
         attachments: [
           {
             id: "01J00000000000000000000006",
@@ -629,6 +697,12 @@ describe("delegation seed prompt", () => {
       ## Sub-tasks
 
       - TASK-2 · Add focused tests (in_progress)
+
+      ## Artifacts
+
+      ### Approved Plan
+      - Approved delegation plan · 01J00000000000000000000007
+        Fetch with: bb tasks-plus artifact show 01J00000000000000000000007
 
       ## Attachments
 
@@ -658,5 +732,45 @@ describe("delegation seed prompt", () => {
       Run the backend gates.
       "
     `);
+  });
+
+  it("reads None. when the task carries no artifacts", () => {
+    const project: Project = {
+      id: "01J00000000000000000000001",
+      name: "Tasks plugin",
+      prefix: "TASK",
+      nextTaskNumber: 2,
+      color: "blue",
+      folderId: null,
+      linkedBbProjectId: "proj_tasks",
+      createdAt: "2026-07-15T17:00:00.000Z",
+    };
+    const task: Task = {
+      id: "01J00000000000000000000002",
+      projectId: project.id,
+      number: 1,
+      key: "TASK-1",
+      title: "Delegate work",
+      description: "",
+      status: "todo",
+      priority: "none",
+      dueDate: null,
+      parentTaskId: null,
+      position: 1_024,
+      createdAt: "2026-07-15T17:01:00.000Z",
+      updatedAt: "2026-07-15T17:01:00.000Z",
+    };
+
+    expect(
+      buildSeedPrompt({
+        task,
+        project,
+        subtasks: [],
+        artifacts: [],
+        attachments: [],
+        recentComments: [],
+        presetInstructions: "",
+      }),
+    ).toContain("## Artifacts\n\nNone.");
   });
 });

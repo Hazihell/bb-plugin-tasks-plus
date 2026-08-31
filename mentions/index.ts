@@ -6,8 +6,14 @@ import {
   type Attachment,
   type Comment,
   type Task,
+  type TaskArtifact,
+  type TaskArtifactKind,
   type TaskThread,
 } from "../db";
+import {
+  formatArtifactManifest,
+  TASK_ARTIFACT_KIND_LABELS,
+} from "../shared/artifact-manifest";
 
 const SEARCH_LIMIT = 10;
 const RECENT_COMMENT_LIMIT = 5;
@@ -25,6 +31,14 @@ interface MentionTaskRow {
 interface AttachmentManifestRow {
   id: string;
   file_name: string;
+}
+
+interface MentionArtifactRow {
+  id: string;
+  key: string;
+  title: string;
+  kind: TaskArtifactKind;
+  project_name: string;
 }
 
 function displayName(value: string): string {
@@ -136,6 +150,102 @@ function formatThreads(threads: readonly TaskThread[]): string {
     .join("\n");
 }
 
+/**
+ * Artifacts are searched by what a human remembers about one: its title, the
+ * task it belongs to, or its kind. Ranking mirrors searchTasks — the
+ * composer's own project first, then newest.
+ */
+function searchArtifacts(
+  database: PluginDatabase,
+  query: string,
+  bbProjectId: string | null,
+): PluginMentionItem[] {
+  const search = `%${escapeLike(query.trim())}%`;
+  const rows = database
+    .prepare<
+      { bbProjectId: string | null; search: string },
+      MentionArtifactRow
+    >(
+      `
+        SELECT
+          a.id,
+          p.prefix || '-' || t.number AS key,
+          a.title,
+          a.kind,
+          p.name AS project_name
+        FROM task_artifacts a
+        JOIN tasks t ON t.id = a.task_id
+        JOIN projects p ON p.id = t.project_id
+        WHERE @search = '%%'
+          OR a.title LIKE @search ESCAPE '\\'
+          OR (p.prefix || '-' || t.number) LIKE @search ESCAPE '\\'
+          OR a.kind LIKE @search ESCAPE '\\'
+        ORDER BY
+          CASE
+            WHEN @bbProjectId IS NOT NULL
+              AND p.linked_bb_project_id = @bbProjectId THEN 0
+            ELSE 1
+          END,
+          a.created_at DESC,
+          a.id DESC
+        LIMIT ${SEARCH_LIMIT}
+      `,
+    )
+    .all({ bbProjectId, search });
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: `${row.key} · ${row.title}`,
+    subtitle: `${TASK_ARTIFACT_KIND_LABELS[row.kind]} · ${row.project_name}`,
+  }));
+}
+
+function artifactSource(artifact: TaskArtifact): string {
+  if (artifact.externalUrl) return `- Source: ${artifact.externalUrl}`;
+  if (artifact.attachmentId) {
+    return `- Source: bb tasks-plus attachment get ${artifact.attachmentId} --out <path>`;
+  }
+  return "";
+}
+
+/**
+ * The whole artifact, untruncated: it was asked for by name, so nothing here
+ * is a summary. Boundedness belongs to the seed prompt's manifest, not here.
+ */
+function buildArtifactContext(
+  store: TasksApiStore,
+  artifactId: string,
+): string {
+  const artifact = store.tasks.getTaskArtifact(artifactId);
+  if (!artifact) throw new Error(`Artifact not found: ${artifactId}`);
+
+  const task = store.tasks.getTask(artifact.taskId);
+  if (!task) throw new Error(`Task not found: ${artifact.taskId}`);
+
+  const lines = [
+    `- Kind: ${TASK_ARTIFACT_KIND_LABELS[artifact.kind]}`,
+    `- Task: ${task.key} · ${task.title}`,
+    `- Created: ${artifact.createdAt}`,
+    `- Source thread: ${artifact.sourceThreadId ?? "None"}`,
+    artifactSource(artifact),
+  ].filter((line) => line !== "");
+
+  return `# ${artifact.title}
+
+${lines.join("\n")}
+
+## Metadata
+
+\`\`\`json
+${JSON.stringify(artifact.metadata, null, 2)}
+\`\`\`
+
+## Body
+
+${artifact.body?.trim() || "No body recorded."}
+`;
+}
+
 function buildTaskContext(
   store: TasksApiStore,
   database: PluginDatabase,
@@ -176,6 +286,10 @@ ${task.description.trim() || "No description provided."}
 
 ${formatSubtasks(store.tasks.listSubtasks(task.id))}
 
+## Artifacts
+
+${formatArtifactManifest(task.key, store.tasks.listTaskArtifacts(task.id))}
+
 ## Attachments
 
 ${formatAttachments(attachments)}
@@ -205,6 +319,17 @@ export function registerMentions(bb: BbPluginApi, store: TasksApiStore): void {
     },
     resolve(itemId) {
       return { context: buildTaskContext(store, database, itemId) };
+    },
+  });
+
+  bb.ui.registerMentionProvider({
+    id: "task-artifact",
+    label: "Task artifacts",
+    search({ query, projectId }) {
+      return searchArtifacts(database, query, projectId);
+    },
+    resolve(itemId) {
+      return { context: buildArtifactContext(store, itemId) };
     },
   });
 }
