@@ -743,7 +743,7 @@ describe("PresetDialog environment section", () => {
     expect(slot.queryByLabelText("Machine")).toBeNull();
   });
 
-  it("offers neither edit nor delete on a preset that ships with the plugin", async () => {
+  it("offers view but neither edit nor delete on a preset that ships with the plugin", async () => {
     const slot = renderManagePresets([
       presetRow({ name: "implement", builtin: true }),
       presetRow({ id: "01HZZZZZZZZZZZZZZZZZZZZZE2", name: "Custom" }),
@@ -752,18 +752,60 @@ describe("PresetDialog environment section", () => {
     await slot.findByText("implement");
     expect(slot.getByText("ships with the plugin")).toBeDefined();
     expect(
+      slot.getByRole("button", { name: "View preset implement" }),
+    ).toBeDefined();
+    expect(
       slot.queryByRole("button", { name: "Edit preset implement" }),
     ).toBeNull();
     expect(
       slot.queryByRole("button", { name: "Delete preset implement" }),
     ).toBeNull();
-    // A custom preset in the same table keeps both actions.
+    // A custom preset in the same table keeps both actions and offers no view.
     expect(
       slot.getByRole("button", { name: "Edit preset Custom" }),
     ).toBeDefined();
     expect(
       slot.getByRole("button", { name: "Delete preset Custom" }),
     ).toBeDefined();
+    expect(
+      slot.queryByRole("button", { name: "View preset Custom" }),
+    ).toBeNull();
+  });
+
+  it("reads a builtin preset's full instructions without offering a save", async () => {
+    const instructions = [
+      "Implement the task end to end.",
+      "",
+      "1. Read the task and its comments.",
+      "2. Write the code.",
+      "3. Run the gate and report.",
+    ].join("\n");
+    const slot = renderManagePresets([
+      presetRow({ name: "implement", builtin: true, instructions }),
+    ]);
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Presets" }));
+    fireEvent.click(
+      await slot.findByRole("button", { name: "View preset implement" }),
+    );
+
+    const dialog = await slot.findByRole("dialog");
+    // The truncating table cell shows the same text; the dialog is the copy
+    // that keeps every line.
+    expect(
+      [...dialog.querySelectorAll("p")].some(
+        (node) => node.textContent === instructions,
+      ),
+    ).toBe(true);
+    expect(
+      dialog.textContent?.includes(
+        "ships with the plugin and cannot be changed",
+      ),
+    ).toBe(true);
+    expect(dialog.textContent?.includes("Worktree · main · Sawyer Air")).toBe(
+      true,
+    );
+    expect(slot.queryByRole("button", { name: "Save preset" })).toBeNull();
+    expect(slot.getByRole("button", { name: "Close" })).toBeDefined();
   });
 
   it("shows a typed update refusal in the preset dialog", async () => {
