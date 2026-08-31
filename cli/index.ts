@@ -21,6 +21,8 @@ import {
 import { delegationRpcContract } from "../delegate/contract";
 import { handlers as delegationHandlers } from "../delegate";
 import {
+  TASK_ARTIFACT_KINDS,
+  taskArtifactSchema,
   tasksRpcContract,
   type Attachment,
   type Folder,
@@ -28,6 +30,8 @@ import {
   type Project,
   type Preset,
   type Task,
+  type TaskArtifact,
+  type TaskArtifactKind,
   type TaskBlocker,
   type TaskMutationResult,
 } from "../shared/contract";
@@ -70,6 +74,7 @@ Commands:
   comment                        Add a task comment
   label create|list|delete
   attachment add|get|list|remove
+  artifact add|list|show|remove
   preset list|show|create|update|delete
   blocker add|rm|list
   dispatch                       Dispatch a task to a new agent thread
@@ -116,6 +121,17 @@ const ATTACHMENT_HELP = `Usage:
 File paths are read from and written to the invoking machine: the thread's
 machine when run inside an agent thread, otherwise the server's machine.
 Pass --machine to target another enrolled machine explicitly.`;
+const ARTIFACT_HELP = `Usage:
+  bb tasks-plus artifact add <key> --kind <kind> --title <title> --meta-file <path> [--body <markdown> | --body-file <path>] [--url <url>] [--attach <path>] [--machine <id-or-name>] [--json]
+  bb tasks-plus artifact list <key> [--kind <kind>]... [--json]
+  bb tasks-plus artifact show <artifact-id> [--json]
+  bb tasks-plus artifact remove <artifact-id> [--json]
+
+Kinds: ${TASK_ARTIFACT_KINDS.join(", ")}.
+
+Artifacts are append-only: add and remove, never edit. --meta-file holds a
+JSON object whose required fields depend on the kind. --kind repeats on list
+to widen the filter; omitting it returns every kind.`;
 const PRESET_HELP = `Usage:
   bb tasks-plus preset list [--json]
   bb tasks-plus preset show <name-or-id> [--json]
@@ -1834,6 +1850,254 @@ async function runAttachment(
   throw new CliError(`unknown attachment subcommand: ${action}`);
 }
 
+/**
+ * The kind is checked here rather than left to the create schema: the create
+ * input is a discriminated union, and a bad discriminant produces an error
+ * that names every arm instead of the one thing the caller got wrong. It also
+ * keeps an unknown kind from reaching the database at all.
+ */
+function parseArtifactKind(value: string): TaskArtifactKind {
+  const kinds: readonly string[] = TASK_ARTIFACT_KINDS;
+  if (!kinds.includes(value)) {
+    throw new CliError(
+      `unknown kind "${value}"; expected one of ${TASK_ARTIFACT_KINDS.join(", ")}`,
+    );
+  }
+  return value as TaskArtifactKind;
+}
+
+async function readArtifactMetadata(
+  bb: BbPluginApi,
+  args: ParsedArgs,
+  ctx: PluginCliContext,
+  clientHostId: string | undefined,
+): Promise<unknown> {
+  // Every kind requires at least one metadata field, so an add without a
+  // metadata file could only ever fail in the schema. Requiring it here turns
+  // that into a usage error.
+  requireOption(args, "meta-file");
+  const text = await readFileOption(
+    bb,
+    args,
+    ctx,
+    clientHostId,
+    "meta",
+    "meta-file",
+  );
+  try {
+    return JSON.parse(text ?? "");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new CliError(`--meta-file is not valid JSON: ${message}`);
+  }
+}
+
+function artifactDetail(
+  artifact: TaskArtifact,
+  taskKey: string,
+): string {
+  return [
+    detail([
+      ["ID", artifact.id],
+      ["Task", taskKey],
+      ["Kind", artifact.kind],
+      ["Title", artifact.title],
+      ["URL", artifact.externalUrl ?? "-"],
+      ["Attachment", artifact.attachmentId ?? "-"],
+      ["Thread", artifact.sourceThreadId ?? "-"],
+      ["Created", artifact.createdAt],
+    ]),
+    "",
+    "Metadata",
+    JSON.stringify(artifact.metadata, null, 2),
+    ...(artifact.body ? ["", "Body", artifact.body] : []),
+  ].join("\n");
+}
+
+async function runArtifact(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  domain: TasksDomain,
+  ctx: PluginCliContext,
+  argv: string[],
+): Promise<string> {
+  const [action, ...rest] = argv;
+  if (!action || action === "--help") return ARTIFACT_HELP;
+  const args = parseArgs(rest);
+  if (args.flags.has("help")) return ARTIFACT_HELP;
+
+  if (action === "add") {
+    assertAllowed(args, [
+      "kind",
+      "title",
+      "meta-file",
+      "body",
+      "body-file",
+      "url",
+      "attach",
+      "machine",
+    ]);
+    const [address] = requirePositionals(
+      args,
+      1,
+      "bb tasks-plus artifact add <key> --kind <kind> --title <title> --meta-file <path> [--body <markdown> | --body-file <path>] [--url <url>] [--attach <path>] [--machine <id-or-name>] [--json]",
+    );
+    // Before the task lookup, so an unknown kind never reaches the database.
+    const kind = parseArtifactKind(requireOption(args, "kind"));
+    const attachOption = option(args, "attach");
+    // No --machine guard here: --meta-file is mandatory, so `add` always reads
+    // a file from the invoking machine and --machine is never meaningless.
+    const task = await resolveTask(domain, address!);
+    const clientHostId = await resolveClientHostId(bb, domain, args, ctx);
+    const metadata = await readArtifactMetadata(bb, args, ctx, clientHostId);
+    const body = await readFileOption(
+      bb,
+      args,
+      ctx,
+      clientHostId,
+      "body",
+      "body-file",
+    );
+    const attachPath =
+      attachOption === undefined
+        ? undefined
+        : resolve(ctx.cwd ?? process.cwd(), attachOption);
+    const attachBytes =
+      attachPath === undefined
+        ? undefined
+        : await readAttachmentSource(bb, clientHostId, attachPath);
+    const base = {
+      taskId: task.id,
+      kind,
+      title: requireOption(args, "title"),
+      metadata,
+      ...(body !== undefined ? { body } : {}),
+      ...(option(args, "url") !== undefined
+        ? { externalUrl: option(args, "url") }
+        : {}),
+      // An artifact written inside an agent thread records the thread that
+      // wrote it, the same way a comment does.
+      ...(ctx.threadId ? { sourceThreadId: ctx.threadId } : {}),
+    };
+    if (attachBytes !== undefined) {
+      // Deliberate dry run, not redundant: the attachment has to exist before
+      // the artifact can cite it, so validating everything else first keeps a
+      // late schema failure from stranding an orphan attachment on the task.
+      tasksRpcContract.createArtifact.input.parse(base);
+    }
+    const attachment =
+      attachBytes === undefined || attachPath === undefined
+        ? null
+        : await saveAttachmentFromBytes(store.tasks, attachBytes, {
+            taskId: task.id,
+            fileName: attachmentFileName(attachPath),
+          });
+    if (attachment) publishAttachmentChanged(bb, store.tasks, attachment);
+    const result = tasksRpcContract.createArtifact.output.parse(
+      await domain.createArtifact(
+        tasksRpcContract.createArtifact.input.parse({
+          ...base,
+          ...(attachment ? { attachmentId: attachment.id } : {}),
+        }),
+      ),
+    );
+    if (!result.ok) throw new CliError(result.error.message);
+    return args.flags.has("json")
+      ? JSON.stringify({ artifact: result.artifact, attachment })
+      : [
+          `Added ${result.artifact.kind} artifact ${result.artifact.title}  ${result.artifact.id}`,
+          ...(attachment
+            ? [`Attached ${attachment.fileName}  ${attachment.id}`]
+            : []),
+        ].join("\n");
+  }
+
+  if (action === "list") {
+    assertAllowed(args, ["kind"]);
+    const [address] = requirePositionals(
+      args,
+      1,
+      "bb tasks-plus artifact list <key> [--kind <kind>]... [--json]",
+    );
+    // Repeatable, because the RPC filter takes a set of kinds.
+    const kinds = options(args, "kind").map(parseArtifactKind);
+    const task = await resolveTask(domain, address!);
+    const artifacts = tasksRpcContract.listArtifacts.output.parse(
+      await domain.listArtifacts(
+        tasksRpcContract.listArtifacts.input.parse({
+          taskId: task.id,
+          ...(kinds.length > 0 ? { kinds } : {}),
+        }),
+      ),
+    ).artifacts;
+    return args.flags.has("json")
+      ? JSON.stringify({ task, artifacts })
+      : table(
+          ["ID", "KIND", "TITLE", "CREATED"],
+          artifacts.map((artifact) => [
+            artifact.id,
+            artifact.kind,
+            artifact.title,
+            artifact.createdAt,
+          ]),
+          "No artifacts.",
+        );
+  }
+
+  if (action === "show") {
+    assertAllowed(args, []);
+    const [artifactId] = requirePositionals(
+      args,
+      1,
+      "bb tasks-plus artifact show <artifact-id> [--json]",
+    );
+    // There is no getArtifact RPC; a single read goes straight to the store,
+    // as the attachment owner lookup does. Storage types metadata loosely, so
+    // the read passes the contract schema exactly as the API handlers do.
+    const stored = store.tasks.getTaskArtifact(
+      artifactId!.trim().toUpperCase(),
+    );
+    if (!stored) throw new CliError(`artifact not found: ${artifactId}`);
+    const artifact = taskArtifactSchema.parse(stored);
+    return args.flags.has("json")
+      ? JSON.stringify({ artifact })
+      : artifactDetail(
+          artifact,
+          store.tasks.getTask(artifact.taskId)?.key ?? artifact.taskId,
+        );
+  }
+
+  if (action === "remove") {
+    assertAllowed(args, []);
+    const [artifactId] = requirePositionals(
+      args,
+      1,
+      "bb tasks-plus artifact remove <artifact-id> [--json]",
+    );
+    // Read first so the confirmation can name what was removed; the delete
+    // RPC only reports whether a row went away.
+    const normalized = artifactId!.trim().toUpperCase();
+    const stored = store.tasks.getTaskArtifact(normalized);
+    if (!stored) throw new CliError(`artifact not found: ${artifactId}`);
+    const artifact = taskArtifactSchema.parse(stored);
+    const result = tasksRpcContract.deleteArtifact.output.parse(
+      await domain.deleteArtifact(
+        tasksRpcContract.deleteArtifact.input.parse({
+          artifactId: normalized,
+        }),
+      ),
+    );
+    if (!result.deleted) {
+      throw new CliError(`artifact not found: ${artifactId}`);
+    }
+    return args.flags.has("json")
+      ? JSON.stringify({ deleted: true, artifact })
+      : `Removed ${artifact.kind} artifact ${artifact.title}  ${artifact.id}`;
+  }
+
+  throw new CliError(`unknown artifact subcommand: ${action}`);
+}
+
 async function runPreset(domain: TasksDomain, argv: string[]): Promise<string> {
   const [action, ...rest] = argv;
   if (!action || action === "--help") return PRESET_HELP;
@@ -2247,6 +2511,11 @@ export function registerTasksCli(
         usage: ATTACHMENT_HELP,
       },
       {
+        name: "artifact",
+        summary: "Add, list, show, or remove durable task artifacts",
+        usage: ARTIFACT_HELP,
+      },
+      {
         name: "preset",
         summary: "List, show, create, update, or delete dispatch presets",
         usage: PRESET_HELP,
@@ -2330,6 +2599,9 @@ export function registerTasksCli(
             break;
           case "attachment":
             stdout = await runAttachment(bb, store, domain, ctx, rest);
+            break;
+          case "artifact":
+            stdout = await runArtifact(bb, store, domain, ctx, rest);
             break;
           case "preset":
             stdout = await runPreset(domain, rest);

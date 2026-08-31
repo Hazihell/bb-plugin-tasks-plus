@@ -2391,4 +2391,463 @@ describe("bb tasks-plus CLI", () => {
 
     await harness.dispose();
   });
+
+  it("records artifacts, filters them by kind, and shows one by id", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bb-tasks-cli-"));
+    const planMeta = join(directory, "plan.json");
+    const decisionMeta = join(directory, "decision.json");
+    const evidenceMeta = join(directory, "evidence.json");
+    await writeFile(
+      planMeta,
+      JSON.stringify({ approvedBy: "Roger", approvedAt: "2026-08-30" }),
+      "utf8",
+    );
+    await writeFile(
+      decisionMeta,
+      JSON.stringify({
+        discovery: "The CLI owned kind validation nowhere.",
+        decision: "Validate the kind in the CLI.",
+        why: "A union discriminant produces an unreadable error.",
+        impact: "One more branch before the task lookup.",
+      }),
+      "utf8",
+    );
+    await writeFile(
+      evidenceMeta,
+      JSON.stringify({
+        command: "npm run test -- cli",
+        exitCode: 0,
+        evidenceKind: "unit",
+      }),
+      "utf8",
+    );
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        files: localFilesSdk(),
+        threads: {
+          get: async ({ threadId }) =>
+            makeThreadResponse({ id: threadId, title: "Artifact writer" }),
+        },
+      },
+    });
+    await plugin(bb);
+
+    try {
+      expect(stdout(await harness.runCli(["--help"]))).toContain(
+        "artifact add|list|show|remove",
+      );
+      expect(stdout(await harness.runCli(["artifact", "--help"]))).toContain(
+        "bb tasks-plus artifact add <key> --kind <kind>",
+      );
+
+      stdout(
+        await harness.runCli([
+          "project",
+          "create",
+          "--name",
+          "Artifacts",
+          "--prefix",
+          "ART",
+        ]),
+      );
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "ART",
+          "--title",
+          "Carry durable records",
+        ]),
+      );
+
+      const added = JSON.parse(
+        stdout(
+          await harness.runCli(
+            [
+              "artifact",
+              "add",
+              "art-1",
+              "--kind",
+              "approved_plan",
+              "--title",
+              "Approved build plan",
+              "--meta-file",
+              planMeta,
+              "--body",
+              "# Plan\n\nDo the thing.",
+              "--url",
+              "https://example.invalid/plan",
+              "--json",
+            ],
+            { threadId: "thr_artifact_writer", projectId: "proj_bb" },
+          ),
+        ),
+      );
+      expect(added).toMatchObject({
+        artifact: {
+          kind: "approved_plan",
+          title: "Approved build plan",
+          externalUrl: "https://example.invalid/plan",
+          attachmentId: null,
+          sourceThreadId: "thr_artifact_writer",
+          metadata: { approvedBy: "Roger", approvedAt: "2026-08-30" },
+        },
+        attachment: null,
+      });
+
+      const humanAdd = stdout(
+        await harness.runCli([
+          "artifact",
+          "add",
+          "ART-1",
+          "--kind",
+          "decision",
+          "--title",
+          "Validate kinds in the CLI",
+          "--meta-file",
+          decisionMeta,
+        ]),
+      );
+      expect(humanAdd).toContain("Added decision artifact");
+      // Invoked outside a thread, so nothing is recorded as the source.
+      const decisionId = humanAdd.trim().split(/\s+/).at(-1)!;
+      stdout(
+        await harness.runCli([
+          "artifact",
+          "add",
+          "ART-1",
+          "--kind",
+          "evidence",
+          "--title",
+          "CLI suite passes",
+          "--meta-file",
+          evidenceMeta,
+        ]),
+      );
+
+      const everything = JSON.parse(
+        stdout(await harness.runCli(["artifact", "list", "ART-1", "--json"])),
+      );
+      expect(everything.task).toMatchObject({ key: "ART-1" });
+      expect(
+        everything.artifacts.map((artifact: { kind: string }) => artifact.kind),
+      ).toEqual(
+        expect.arrayContaining(["approved_plan", "decision", "evidence"]),
+      );
+
+      const filtered = JSON.parse(
+        stdout(
+          await harness.runCli([
+            "artifact",
+            "list",
+            "ART-1",
+            "--kind",
+            "decision",
+            "--json",
+          ]),
+        ),
+      );
+      expect(
+        filtered.artifacts.map((artifact: { kind: string }) => artifact.kind),
+      ).toEqual(["decision"]);
+
+      const twoKinds = JSON.parse(
+        stdout(
+          await harness.runCli([
+            "artifact",
+            "list",
+            "ART-1",
+            "--kind",
+            "decision",
+            "--kind",
+            "evidence",
+            "--json",
+          ]),
+        ),
+      );
+      expect(
+        twoKinds.artifacts
+          .map((artifact: { kind: string }) => artifact.kind)
+          .sort(),
+      ).toEqual(["decision", "evidence"]);
+
+      const listTable = stdout(
+        await harness.runCli(["artifact", "list", "ART-1"]),
+      );
+      expect(listTable).toContain("ID");
+      expect(listTable).toContain("KIND");
+      expect(listTable).toContain("CREATED");
+      expect(listTable).toContain("Approved build plan");
+
+      const shown = stdout(
+        await harness.runCli(["artifact", "show", decisionId]),
+      );
+      expect(shown).toContain(`ID          ${decisionId}`);
+      expect(shown).toContain("Task        ART-1");
+      expect(shown).toContain("Kind        decision");
+      expect(shown).toContain("Metadata");
+      // detail() one-lines its values, so the metadata block sits outside it.
+      expect(shown).toContain('"discovery": "The CLI owned kind validation');
+
+      const shownJson = JSON.parse(
+        stdout(await harness.runCli(["artifact", "show", decisionId, "--json"])),
+      );
+      expect(shownJson).toMatchObject({
+        artifact: { id: decisionId, kind: "decision" },
+      });
+
+      const missing = await harness.runCli([
+        "artifact",
+        "show",
+        "0000000000000000000000MISS",
+      ]);
+      expect(missing).toMatchObject({
+        exitCode: 1,
+        stderr: "artifact not found: 0000000000000000000000MISS",
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+      await harness.dispose();
+    }
+  });
+
+  it("rejects an unknown kind and unusable metadata before writing anything", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bb-tasks-cli-"));
+    const goodMeta = join(directory, "plan.json");
+    const malformedMeta = join(directory, "broken.json");
+    const wrongShapeMeta = join(directory, "blank-approver.json");
+    await writeFile(
+      goodMeta,
+      JSON.stringify({ approvedBy: "Roger", approvedAt: "2026-08-30" }),
+      "utf8",
+    );
+    await writeFile(malformedMeta, "{ approvedBy: nope", "utf8");
+    await writeFile(
+      wrongShapeMeta,
+      JSON.stringify({ approvedBy: "  ", approvedAt: "2026-08-30" }),
+      "utf8",
+    );
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: { files: localFilesSdk() },
+    });
+    await plugin(bb);
+
+    try {
+      stdout(
+        await harness.runCli([
+          "project",
+          "create",
+          "--name",
+          "Guards",
+          "--prefix",
+          "GRD",
+        ]),
+      );
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "GRD",
+          "--title",
+          "Guarded task",
+        ]),
+      );
+
+      const unknownKind = await harness.runCli([
+        "artifact",
+        "add",
+        "GRD-1",
+        "--kind",
+        "postmortem",
+        "--title",
+        "Not a kind",
+        "--meta-file",
+        goodMeta,
+      ]);
+      expect(unknownKind.exitCode).toBe(1);
+      expect(unknownKind.stderr).toContain('unknown kind "postmortem"');
+      expect(unknownKind.stderr).toContain(
+        "approved_plan, implementation_plan, decision, evidence, review, review_result",
+      );
+
+      const missingMeta = await harness.runCli([
+        "artifact",
+        "add",
+        "GRD-1",
+        "--kind",
+        "approved_plan",
+        "--title",
+        "No metadata",
+      ]);
+      expect(missingMeta).toMatchObject({
+        exitCode: 1,
+        stderr: "missing required --meta-file",
+      });
+
+      const malformed = await harness.runCli([
+        "artifact",
+        "add",
+        "GRD-1",
+        "--kind",
+        "approved_plan",
+        "--title",
+        "Malformed metadata",
+        "--meta-file",
+        malformedMeta,
+      ]);
+      expect(malformed.exitCode).toBe(1);
+      expect(malformed.stderr).toContain("--meta-file is not valid JSON");
+
+      const wrongShape = await harness.runCli([
+        "artifact",
+        "add",
+        "GRD-1",
+        "--kind",
+        "approved_plan",
+        "--title",
+        "Blank approver",
+        "--meta-file",
+        wrongShapeMeta,
+      ]);
+      expect(wrongShape.exitCode).toBe(1);
+      expect(wrongShape.stderr).toContain("metadata.approvedBy");
+      expect(wrongShape.stderr).toContain("must not be blank");
+
+      const unreadable = await harness.runCli([
+        "artifact",
+        "add",
+        "GRD-1",
+        "--kind",
+        "approved_plan",
+        "--title",
+        "Missing file",
+        "--meta-file",
+        join(directory, "absent.json"),
+      ]);
+      expect(unreadable.exitCode).toBe(1);
+      expect(unreadable.stderr).toContain("could not read");
+
+      // Nothing above reached the database.
+      expect(
+        JSON.parse(
+          stdout(await harness.runCli(["artifact", "list", "GRD-1", "--json"])),
+        ).artifacts,
+      ).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+      await harness.dispose();
+    }
+  });
+
+  it("attaches a payload to an artifact in one call and removes the artifact once", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bb-tasks-cli-"));
+    const metaPath = join(directory, "evidence.json");
+    const logPath = join(directory, "vitest.log");
+    await writeFile(
+      metaPath,
+      JSON.stringify({
+        command: "npm run test -- cli",
+        exitCode: 0,
+        evidenceKind: "unit",
+      }),
+      "utf8",
+    );
+    await writeFile(logPath, "all suites passed\n", "utf8");
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: { files: localFilesSdk() },
+    });
+    await plugin(bb);
+
+    try {
+      stdout(
+        await harness.runCli([
+          "project",
+          "create",
+          "--name",
+          "Payloads",
+          "--prefix",
+          "PAY",
+        ]),
+      );
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "PAY",
+          "--title",
+          "Carries a log",
+        ]),
+      );
+
+      const added = JSON.parse(
+        stdout(
+          await harness.runCli([
+            "artifact",
+            "add",
+            "PAY-1",
+            "--kind",
+            "evidence",
+            "--title",
+            "Suite output",
+            "--meta-file",
+            metaPath,
+            "--attach",
+            logPath,
+            "--json",
+          ]),
+        ),
+      );
+      expect(added.attachment).toMatchObject({ fileName: "vitest.log" });
+      expect(added.artifact.attachmentId).toBe(added.attachment.id);
+
+      const roundtrip = join(directory, "roundtrip.log");
+      stdout(
+        await harness.runCli([
+          "attachment",
+          "get",
+          added.attachment.id,
+          "--out",
+          roundtrip,
+        ]),
+      );
+      expect(await readFile(roundtrip, "utf8")).toBe("all suites passed\n");
+
+      const removed = JSON.parse(
+        stdout(
+          await harness.runCli([
+            "artifact",
+            "remove",
+            added.artifact.id,
+            "--json",
+          ]),
+        ),
+      );
+      expect(removed).toMatchObject({
+        deleted: true,
+        artifact: { id: added.artifact.id, kind: "evidence" },
+      });
+
+      const again = await harness.runCli([
+        "artifact",
+        "remove",
+        added.artifact.id,
+      ]);
+      expect(again).toMatchObject({
+        exitCode: 1,
+        stderr: `artifact not found: ${added.artifact.id}`,
+      });
+
+      expect(
+        JSON.parse(
+          stdout(await harness.runCli(["artifact", "list", "PAY-1", "--json"])),
+        ).artifacts,
+      ).toEqual([]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+      await harness.dispose();
+    }
+  });
 });
