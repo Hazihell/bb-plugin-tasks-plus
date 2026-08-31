@@ -14,7 +14,9 @@ never write files, and never know they are being recorded. One writer, one
 failure point, and no cleanup to do when an axis dies.
 
 Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill.
-A repo's `docs/agents/issue-tracker.md` overrides it.
+There is no override here — a `review_result` artifact is a Tasks Plus record, so
+a repo pointing at another tracker puts this skill out of scope rather than
+redirecting it.
 
 ## Process
 
@@ -23,6 +25,16 @@ A repo's `docs/agents/issue-tracker.md` overrides it.
 In order: the key given in the invocation; a task key in the branch name; a task
 key in `git log <fixed-point>..HEAD`. If none is found, ask. Never guess, and
 never write to a task the review did not come from.
+
+Then read the task before writing anything to it:
+
+```sh
+bb tasks-plus show <KEY> --json
+```
+
+A key that does not resolve, or resolves to a task unrelated to the commits,
+stops the skill here. Failing before the review is cheaper than discovering it
+after.
 
 ### 2. Pin identity before reviewing
 
@@ -70,9 +82,14 @@ is strict and rejects any other field.
 map: `0` means ran-and-clean, absence means not-run. The machine-readable side
 follows the same rule as the prose.
 
-`verdict` is `pass` only when every axis ran and every count is `0`; `fail` when
-every axis that ran reported findings; `mixed` otherwise, including whenever an
-axis did not run. An incomplete review can never read as `pass`.
+`verdict` follows these rules in order, first match wins, so the same review
+always yields the same verdict:
+
+1. Any axis absent from `findingCounts` — `mixed`. An incomplete review can never
+   read as `pass`, whatever the axes that did run reported.
+2. Every count `0` — `pass`.
+3. Every count above `0` — `fail`.
+4. Otherwise — `mixed`.
 
 ### 6. Write the artifact
 
