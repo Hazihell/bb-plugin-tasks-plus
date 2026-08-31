@@ -1,63 +1,34 @@
 ---
 name: tasks-plus
-description: Tasks Plus is this user's issue tracker. Use when asked to work on or track a task, when the prompt mentions a task key such as ABC-12, when work needs task comments, attachments, delegation tracking, or status updates, and whenever another skill refers to "the issue tracker" — publishing or fetching an issue, spec, PRD, or ticket, breaking a plan into tickets, applying triage labels, or recording parent and blocked-by relationships.
+description: This user's issue tracker. Use when working on or tracking a task, when a prompt mentions a task key such as ABC-12, or when another skill refers to "the issue tracker" — publishing or fetching an issue, spec or ticket, breaking a plan into tickets, applying triage labels, or recording parent and blocked-by relationships.
 ---
 
-# Tasks
+Use the `bb tasks-plus` CLI to understand the assigned task, keep its record useful, and report the outcome where the work is tracked.
 
-Use the `bb tasks-plus` CLI to understand the assigned task, keep its record useful,
-and report the outcome where the work is tracked.
+## Presets
 
-Dispatch requires a preset. One ships with the plugin — `implement`, below — and
-is the default choice; the rest are user-defined. Use `bb tasks-plus preset list`
-and create one when the work needs a different model or permission level.
-
-Create or update the same execution selection exposed in the Tasks UI with
-`--provider`, `--model`, `--reasoning`, and optional
-`--service-tier default|fast|none`:
+Dispatch requires a preset. `implement` ships with the plugin and is the default choice; the rest are yours. `bb tasks-plus preset list` shows them, and `preset create`/`preset update` take the same execution fields the Tasks UI exposes:
 
 ```sh
 bb tasks-plus preset create --name "Codex high" --provider codex \
-  --model gpt-5.6-sol --reasoning high --service-tier fast \
-  --permission auto
+  --model gpt-5.6-sol --reasoning high --service-tier fast --permission auto
 ```
 
-`preset update` accepts the same flags; `--service-tier none` clears a tier.
+`--service-tier none` clears a tier.
 
-### The implement preset
+A preset's instructions ride on every seed prompt it dispatches, so a working thread's lifecycle belongs in the preset rather than in each task description. The shipped `implement` preset is that lifecycle: one thread owns the task end to end — read, investigate, plan as an artifact, build test-first, evidence and decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` — and never splits it into new tasks. It names only skills this plugin bundles, so it works on an install with no personal skills.
 
-A preset's instructions ride on every seed prompt it dispatches, so a working
-thread's lifecycle belongs in the preset, not in each task description. The
-shipped `implement` preset is that lifecycle: one thread owns the task end to end
-— read, investigate, plan as an artifact, build test-first, evidence and
-decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` —
-and never splits it into new tasks. It names only skills this plugin bundles, so
-it works on an install with no personal skills at all.
-
-The plugin owns its name and its instructions: seeded on first open, restored on
-every later open, and refused for editing or deletion. Everything else — provider,
-model, reasoning, permission, environment — is yours to change, in the UI or with
-`preset update`, and survives every refresh. `bb tasks-plus preset show implement`
-prints the live text.
+The plugin owns that preset's name and instructions: seeded on first open, restored on every later open, refused for editing or deletion. Provider, model, reasoning, permission and environment stay yours to change and survive every refresh. `bb tasks-plus preset show implement` prints the live text.
 
 ## Work a task
 
-1. Find and read the task before acting:
+1. Read the task before acting. Alongside the description and record, the detail carries the GitHub pull requests the attached threads produced, with state, read from environment metadata. Use `--json` when the result will drive commands or code.
 
    ```sh
    bb tasks-plus show ABC-12
    ```
 
-   The detail includes the description, status, priority, labels, subtasks,
-   comments, attachments, attached worker threads, and the GitHub pull
-   requests those threads produced (from environment metadata, with state
-   open/draft/merged/closed). Use
-   `bb tasks-plus show ABC-12 --json` when the result will drive commands or code.
-
-   For project-wide discovery, `bb tasks-plus list` returns at most 100 rows by
-   default. Pass `--limit 1-500`; in JSON, continue with `nextCursor` via the
-   same filters/sort and `--cursor <value>`. A task-list mutation makes an old
-   cursor stale, so restart without it.
+   For project-wide discovery, `bb tasks-plus list` returns at most 100 rows; pass `--limit 1-500`, and in JSON continue with `nextCursor` via `--cursor <value>` under the same filters and sort. Any task-list mutation makes a cursor stale, so restart without it.
 
 2. Fetch every relevant attachment before making assumptions about it:
 
@@ -65,125 +36,69 @@ prints the live text.
    bb tasks-plus attachment get <attachment-id> --out <path>
    ```
 
-3. Do the work. Post one substantive comment at each meaningful milestone,
-   such as a completed investigation, an implementation ready for validation,
-   or a concrete blocker:
+3. Do the work, commenting once at each meaningful milestone — a completed investigation, an implementation ready for validation, a concrete blocker. Say what changed or was learned, what validation ran, and what risk or blocker remains.
 
    ```sh
    bb tasks-plus comment ABC-12 --body "Implemented the change; focused validation now passes."
    ```
 
-   Add `--notify` only when the new comment should be delivered to the thread
-   that authored the task's most recent agent reply. This resumes an idle
-   recipient; with no prior agent reply, the comment is recorded without
-   targeting an unrelated thread. In agent context, the new comment keeps the
-   current thread identity and an explicit `--author`, while delivery still
-   targets the prior latest responder rather than the new comment itself.
+   `--notify` also delivers the comment to the thread that wrote the task's most recent agent reply, resuming it if idle; with no prior agent reply it is simply recorded. The new comment keeps the current thread's identity and its explicit `--author`, while delivery still targets that prior responder.
 
-4. Attach result artifacts that belong with the task, such as reports,
-   screenshots, patches, or generated files. `--file` accepts images and
-   other files (for example `.png`, `.jpg`, `.svg`, `.pdf`, `.md`, `.patch`,
-   or logs).
+4. Attach result artifacts that belong with the task — reports, screenshots, patches, logs, generated files.
 
-   **Task-level attachment** — pass the task key so the file sits on the
-   task itself:
+   A task key attaches at task level:
 
    ```sh
    bb tasks-plus attachment add ABC-12 --file ./report.md
-   bb tasks-plus attachment add ABC-12 --file ./screenshot.png
    ```
 
-   **Comment-level attachment** — pass a comment ID so the file sits on that
-   comment (for example a screenshot that belongs with a specific milestone
-   note). Create the comment with `--json`, capture `.comment.id`, then add
-   the attachment:
+   A comment ID attaches to that comment, for a file belonging with one milestone note. Create the comment with `--json`, capture `.comment.id`, then attach:
 
    ```sh
    comment_id=$(
-     bb tasks-plus comment ABC-12 \
-       --body "Screenshot of the failing step." \
+     bb tasks-plus comment ABC-12 --body "Screenshot of the failing step." \
        --json | jq -r '.comment.id'
    )
    bb tasks-plus attachment add "$comment_id" --file ./screenshot.png
-   bb tasks-plus attachment add "$comment_id" --file ./trace.log
    ```
 
-   A task key attaches at task level; a comment ID attaches to that comment.
-   Do not pass a task key when the file should hang off a comment. Use
-   `--json` when capturing the returned attachment metadata. When creating a
-   task that should start with files, pass repeatable `--attach <path>` to
-   `bb tasks-plus create` instead of attaching afterwards. Remove an attachment by
-   id with `bb tasks-plus attachment remove <attachment-id>` (row and blob are
-   deleted together); reuse the ids from `bb tasks-plus attachment list <key>`.
-   Referenced attachments are rejected unless the caller explicitly confirms
-   content cleanup with `--remove-references`; that flag removes the saved
-   description image reference together with the row and blob.
+   A task that should start with files takes repeatable `--attach <path>` on `bb tasks-plus create` instead. `bb tasks-plus attachment list <key>` gives the ids that `bb tasks-plus attachment remove <attachment-id>` takes, deleting row and blob together. A referenced attachment is refused until the caller confirms content cleanup with `--remove-references`, which also drops the saved description image reference.
 
-   File paths (`--file`, `--attach`, `--out`, `--description-file`,
-   `--body-file`, `--meta-file`) are read from and written to the invoking
-   machine: inside
-   an agent thread that is the thread's machine, so local paths just work.
-   Outside a thread they target the server's machine; pass
-   `--machine <id-or-name>` to address files on another enrolled machine.
+   File paths (`--file`, `--attach`, `--out`, `--description-file`, `--body-file`, `--meta-file`) are read and written on the invoking machine: the thread's machine inside an agent thread, so local paths just work; the server's machine outside one. `--machine <id-or-name>` addresses another enrolled machine.
 
-5. When the work is ready for review, update the task:
+5. When implementation is complete and awaiting human or agent review:
 
    ```sh
    bb tasks-plus update ABC-12 --status in_review
    ```
 
-   Change task hierarchy with `bb tasks-plus update ABC-12 --parent ABC-10`, using
-   either a task key or ID for the parent. Promote a subtask to the top level
-   with `bb tasks-plus update ABC-12 --no-parent`; the two parent flags cannot be
-   combined.
+   Where the work cannot proceed, leave the status accurate and comment with the specific blocker, what you tried, and what would unblock it. Reserve `done` for a task whose completion criteria are met.
 
-   If the work cannot proceed, leave the status accurate and comment with the
-   specific blocker, what you tried, and what would unblock it. Do not mark a
-   blocked task complete.
-
-6. Delegated threads are attached automatically. If this thread was not
-   delegated from Tasks, attach it yourself so the task shows the active work:
+6. Delegated threads attach automatically. A thread that arrived another way attaches itself so the task shows the active work, and detaches when it is finished with the task — a hand-off, a respawned replacement, a dead predecessor — so `bb tasks-plus threads ABC-12` stays accurate. `detach` without `--thread` detaches the current one.
 
    ```sh
    bb tasks-plus attach ABC-12
-   ```
-
-   When a thread is done with a task (hand-off, respawned replacement, or a
-   predecessor that died), detach it so `bb tasks-plus threads ABC-12` stays
-   accurate. Omit `--thread` to detach the current thread:
-
-   ```sh
    bb tasks-plus detach ABC-12 --thread thr_dead_predecessor
    ```
 
 ## Artifacts
 
-Comments narrate; artifacts are the durable record. Attach one whenever the
-work produces something a later reader must be able to trust: an approved or
-implementation plan, a decision, evidence that a check ran, a review, or a
-review result.
+Comments narrate; artifacts are the durable record. Add one whenever the work produces something a later reader must be able to trust.
 
 ```sh
 bb tasks-plus artifact add ABC-12 --kind evidence \
   --title "CLI suite passes" --meta-file /tmp/evidence.json
 ```
 
-`--meta-file` is required and holds a JSON object whose fields depend on the
-kind — pass a file, not shell-quoted JSON:
+`--meta-file` is required and holds a JSON object — a file, never shell-quoted JSON — whose fields depend on the kind:
 
-- `approved_plan`, `implementation_plan` — `approvedBy`, `approvedAt`
-  (`YYYY-MM-DD`)
+- `approved_plan`, `implementation_plan` — `approvedBy`, `approvedAt` (`YYYY-MM-DD`)
 - `decision` — `discovery`, `decision`, `why`, `impact`
-- `evidence` — `command`, `exitCode`, `evidenceKind` (`unit`, `integration`,
-  `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`,
-  `security`, `manual`)
+- `evidence` — `command`, `exitCode`, `evidenceKind` (`unit`, `integration`, `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`, `security`, `manual`)
 - `review` — `baseRef`, `headSha`, `environmentId`, `concerns`
 - `review_result` — `verdict` (`pass`/`fail`/`mixed`), `findingCounts`
 
-Add `--body <markdown>` or `--body-file <path>` for the narrative, `--url` for
-an external link, and `--attach <path>` to store a payload — a log, a diff, a
-report — alongside the artifact in one call. Run inside an agent thread and the
-artifact records which thread wrote it.
+Add `--body` or `--body-file` for the narrative, `--url` for an external link, and `--attach <path>` to store a payload alongside the artifact in one call. Run inside an agent thread and the artifact records which thread wrote it.
 
 ```sh
 bb tasks-plus artifact list ABC-12 --kind decision --kind evidence
@@ -191,15 +106,11 @@ bb tasks-plus artifact show <artifact-id>
 bb tasks-plus artifact remove <artifact-id>
 ```
 
-Artifacts are append-only: there is no edit. A record that turned out wrong is
-removed and re-added, or superseded by a later one that says so.
+Artifacts are append-only: there is no edit. A record that turned out wrong is removed and re-added, or superseded by a later one that says so.
 
-## Blockers
+## Blockers and hierarchy
 
-A task is blocked when it has an unresolved blocker — another task that is not
-yet `done` or `canceled`. Blocked is derived, never stored: closing or
-cancelling the blocker unblocks the dependent immediately, and there is no
-unblock action to perform.
+A task is blocked when it has an unresolved blocker — another task not yet `done` or `canceled`. Blocked is derived, never stored, so closing or cancelling the blocker unblocks the dependent immediately and there is no unblock action.
 
 ```sh
 bb tasks-plus blocker add ABC-12 ABC-9   # ABC-12 is blocked by ABC-9
@@ -207,61 +118,35 @@ bb tasks-plus blocker rm ABC-12 ABC-9
 bb tasks-plus blocker list ABC-12        # both directions: blocked by, and blocking
 ```
 
-Blocking is enforced, not advisory: a blocked task refuses
-`--status in_progress` and refuses `dispatch`. Cycles are rejected when the edge
-is written. Resolved blockers stay in the list — the list is the record of what
-held the task up.
+Blocking is enforced, not advisory: a blocked task refuses `--status in_progress` and refuses `dispatch`. Cycles are rejected as the edge is written. Resolved blockers stay in the list, which is the record of what held the task up.
 
-Blockers are orthogonal to `--parent`. A parent groups work; a blocker orders
-it. A task may be blocked by a task in another project.
+Blockers are orthogonal to `--parent`. A parent groups work; a blocker orders it, and may live in another project. Set hierarchy with `bb tasks-plus update ABC-12 --parent ABC-10` (key or ID) and `--no-parent` to promote a subtask to the top level; the two flags cannot be combined.
 
 ## Use as the project issue tracker
 
-Skills that speak of "the issue tracker", "publishing an issue", "fetching a
-ticket", or triage labels mean Tasks Plus — unless the repo carries its own
-`docs/agents/issue-tracker.md`, which wins where it exists. An issue number is a
-task key such as `ABC-12`.
+Skills that speak of "the issue tracker", "publishing an issue", "fetching a ticket", or triage labels mean Tasks Plus — unless the repo carries its own `docs/agents/issue-tracker.md`, which wins where it exists. An issue number is a task key such as `ABC-12`.
 
-Two things a skill writes as prose are relations here, and the relation is the
-record:
+Two things a skill writes as prose are relations here, and the relation is the record:
 
 - a **Parent** section → `--parent <key>` on create
 - a **Blocked by** section → `bb tasks-plus blocker add <task> <blocker>`
 
-So create parents before children and blockers before dependents, and capture
-each new key with `--json | jq -r '.task.key'`.
+So create parents before children and blockers before dependents, capturing each new key with `--json | jq -r '.task.key'`.
 
-The five triage roles — `needs-triage`, `needs-info`, `ready-for-agent`,
-`ready-for-human`, `wontfix` — are labels. Statuses track the work itself and
-drive blocker resolution, so they stay free of triage state. Create a missing
-label with `bb tasks-plus label create --project <prefix> --name <name>`.
+The five triage roles — `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix` — are labels. Statuses track the work itself and drive blocker resolution, so they stay free of triage state. Create a missing label with `bb tasks-plus label create --project <prefix> --name <name>`.
 
 ## Link tasks in responses
 
-When your answer refers the user to a task — including a task you just
-created — emit this leaf directive on its own line instead of writing the
-key as plain text:
+When your answer refers the user to a task, including one you just created, emit this leaf directive on its own line rather than writing the key as plain text:
 
 ```md
 ::task{key="ABC-12"}
 ```
 
-`key` is required. Optionally add `title="…"` as a display fallback shown
-while the card loads and when the key no longer resolves. The rendered card
-shows the live status, title, and priority, opens the task in the thread
-side panel, and links to the full Tasks app. Emit one directive per line;
-each renders its own card.
+`key` is required; optional `title="…"` is the display fallback shown while the card loads and when the key no longer resolves. The card shows live status, title and priority, opens the task in the thread side panel, and links to the full Tasks app. One directive per line, one card each.
 
 ## Invariants
 
-- Valid task statuses are `backlog`, `todo`, `in_progress`, `in_review`,
-  `done`, and `canceled`.
-- Use `in_review` when implementation is complete but still needs human or
-  agent review. Use `done` only when the task's completion criteria are met.
-- Write one comment per meaningful milestone. Combine related facts into a
-  useful update; never spam progress pings, command-by-command narration, or
-  repeated status messages.
-- Comments should say what changed or was learned, what validation ran, and any
-  remaining risk or blocker.
-- Prefer stable task keys such as `ABC-12` for task commands. Use `--json` for
-  machine-readable output and human output for quick inspection.
+- Statuses are `backlog`, `todo`, `in_progress`, `in_review`, `done`, `canceled`.
+- One comment per meaningful milestone, combining related facts into a single useful update.
+- Prefer stable task keys such as `ABC-12` for task commands.
