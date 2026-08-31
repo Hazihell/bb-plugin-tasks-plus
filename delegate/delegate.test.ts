@@ -127,6 +127,135 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("spawns a task into its own dispatch target over the project target", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_task_target" }),
+          get: async () =>
+            makeThreadResponse({ id: "thr_task_target", status: "starting" }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Task target",
+      prefix: "TGT",
+      color: "blue",
+      linkedBbProjectId: "proj_project",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Dispatch to the task target",
+      dispatchBbProjectId: "proj_task",
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await harness.callRpc("delegate", { taskId: task.id, presetId: preset.id });
+
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([
+      [
+        expect.objectContaining({
+          projectId: "proj_task",
+          prompt: expect.stringContaining(
+            "- Linked bb project: proj_task (from this task)",
+          ),
+        }),
+      ],
+    ]);
+
+    await harness.dispose();
+  });
+
+  it("spawns a sub-task into its parent's dispatch target when it has none", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_parent_target" }),
+          get: async () =>
+            makeThreadResponse({
+              id: "thr_parent_target",
+              status: "starting",
+            }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Parent target",
+      prefix: "PAR",
+      color: "blue",
+      linkedBbProjectId: "proj_project",
+    });
+    const parent = store.tasks.createTask({
+      projectId: project.id,
+      title: "Parent",
+      dispatchBbProjectId: "proj_parent",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Child",
+      parentTaskId: parent.id,
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await harness.callRpc("delegate", { taskId: task.id, presetId: preset.id });
+
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([
+      [
+        expect.objectContaining({
+          projectId: "proj_parent",
+          prompt: expect.stringContaining(
+            `- Linked bb project: proj_parent (from ${parent.key})`,
+          ),
+        }),
+      ],
+    ]);
+
+    await harness.dispose();
+  });
+
+  it("spawns a task with no own or ancestor target into the project target", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_project_target" }),
+          get: async () =>
+            makeThreadResponse({
+              id: "thr_project_target",
+              status: "starting",
+            }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Project target",
+      prefix: "PRJ",
+      color: "blue",
+      linkedBbProjectId: "proj_project",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Use the project target",
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store);
+
+    await harness.callRpc("delegate", { taskId: task.id, presetId: preset.id });
+
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([
+      [expect.objectContaining({ projectId: "proj_project" })],
+    ]);
+
+    await harness.dispose();
+  });
+
   it("corrects the attached row when a delegated thread becomes active immediately", async () => {
     const { bb, harness } = createFakePluginHost({
       pluginId: "tasks",
@@ -773,6 +902,8 @@ describe("delegation seed prompt", () => {
       priority: "high",
       dueDate: null,
       parentTaskId: null,
+      baseBranch: null,
+      dispatchBbProjectId: null,
       position: 1_024,
       createdAt: "2026-07-15T17:01:00.000Z",
       updatedAt: "2026-07-15T17:01:00.000Z",
@@ -815,6 +946,11 @@ describe("delegation seed prompt", () => {
       buildSeedPrompt({
         task,
         project,
+        dispatchTarget: {
+          bbProjectId: "proj_tasks",
+          scope: "project",
+          ancestorKey: null,
+        },
         subtasks: [subtask],
         artifacts: [
           {
@@ -910,6 +1046,8 @@ describe("delegation seed prompt", () => {
       priority: "none",
       dueDate: null,
       parentTaskId: null,
+      baseBranch: null,
+      dispatchBbProjectId: null,
       position: 1_024,
       createdAt: "2026-07-15T17:01:00.000Z",
       updatedAt: "2026-07-15T17:01:00.000Z",
@@ -919,6 +1057,11 @@ describe("delegation seed prompt", () => {
       buildSeedPrompt({
         task,
         project,
+        dispatchTarget: {
+          bbProjectId: "proj_tasks",
+          scope: "project",
+          ancestorKey: null,
+        },
         subtasks: [],
         artifacts: [],
         attachments: [],

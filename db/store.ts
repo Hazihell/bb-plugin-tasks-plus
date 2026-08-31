@@ -123,6 +123,7 @@ interface TaskRow {
   due_date: string | null;
   parent_task_id: string | null;
   base_branch: string | null;
+  dispatch_bb_project_id: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -360,9 +361,12 @@ function validateDueDate(dueDate: string | null): string | null {
   return dueDate;
 }
 
-function validateLinkedBbProjectId(id: string | null): string | null {
+function validateLinkedBbProjectId(
+  id: string | null,
+  field = "linkedBbProjectId",
+): string | null {
   if (id !== null && !id.startsWith("proj_")) {
-    throw new Error("linkedBbProjectId must be a bb proj_* id");
+    throw new Error(`${field} must be a bb proj_* id`);
   }
   return id;
 }
@@ -440,6 +444,7 @@ function taskFromRow(row: TaskRow): Task {
     dueDate: row.due_date,
     parentTaskId: row.parent_task_id,
     baseBranch: row.base_branch,
+    dispatchBbProjectId: row.dispatch_bb_project_id,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -989,6 +994,7 @@ export function createTasksStore(db: PluginDatabase) {
           string | null,
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -997,8 +1003,9 @@ export function createTasksStore(db: PluginDatabase) {
         `
       INSERT INTO tasks (
         id, project_id, number, title, description, status, priority, due_date,
-        parent_task_id, base_branch, position, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        parent_task_id, base_branch, dispatch_bb_project_id, position, created_at,
+        updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       ).run(
         id,
@@ -1011,6 +1018,10 @@ export function createTasksStore(db: PluginDatabase) {
         validateDueDate(input.dueDate ?? null),
         parentTaskId,
         validateBaseBranch(input.baseBranch ?? null, "Task baseBranch"),
+        validateLinkedBbProjectId(
+          input.dispatchBbProjectId ?? null,
+          "dispatchBbProjectId",
+        ),
         position,
         createdAt,
         createdAt,
@@ -1420,6 +1431,7 @@ export function createTasksStore(db: PluginDatabase) {
           string | null,
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -1428,7 +1440,8 @@ export function createTasksStore(db: PluginDatabase) {
         `
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
-          parent_task_id = ?, base_branch = ?, position = ?, updated_at = ?
+          parent_task_id = ?, base_branch = ?, dispatch_bb_project_id = ?,
+          position = ?, updated_at = ?
         WHERE id = ?
       `,
       ).run(
@@ -1445,6 +1458,12 @@ export function createTasksStore(db: PluginDatabase) {
         input.baseBranch === undefined
           ? current.baseBranch
           : validateBaseBranch(input.baseBranch, "Task baseBranch"),
+        input.dispatchBbProjectId === undefined
+          ? current.dispatchBbProjectId
+          : validateLinkedBbProjectId(
+              input.dispatchBbProjectId,
+              "dispatchBbProjectId",
+            ),
         position,
         nowIso(),
         id,
