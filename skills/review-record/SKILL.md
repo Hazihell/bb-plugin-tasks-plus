@@ -1,6 +1,6 @@
 ---
 name: review-record
-description: "Review the changes since a fixed point along two axes — Standards and Spec — against the originating Tasks Plus task, and persist the aggregate as a `review_result` artifact on that task, with one comment as the index. Use when a review must outlive the thread it ran in, or when asked to review and record."
+description: "Two-axis review of the changes since a fixed point, recorded as a durable review_result artifact on the originating task."
 disable-model-invocation: true
 ---
 
@@ -11,12 +11,8 @@ task that asked for the work:
 - **Spec**: does the code faithfully implement the originating task?
 
 The task is both the spec and the destination. One lookup fixes what the review
-is judged against and where the result lands, so a review can never be recorded
-against a task other than the one that briefed it.
-
-The axes run as **parallel agents** so they don't pollute each other's context.
-They are never told the task key and never write anything: there is one writer,
-one failure point, and nothing to clean up when an axis dies.
+is judged against and where the result lands, so a review is always recorded
+against the task that briefed it.
 
 Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill. A
 `review_result` is a Tasks Plus record, so a repo on another tracker puts this
@@ -102,6 +98,10 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 ### 4. Dispatch both axes in parallel
 
+You are the sole writer. Each agent gets exactly one axis and no task key, and
+returns a report; separate contexts are what keep one axis from polluting the
+other, and a dead axis costs nothing to clean up.
+
 **Pick the reviewer first.** Default: one message with two `Agent` tool calls,
 `general-purpose` for both.
 
@@ -112,8 +112,6 @@ message so they run concurrently:
 
 - `--provider codex --model gpt-5.6-sol --reasoning-level high --parent-self`
 - Titles `review/standards: <fixed-point>..HEAD` and `review/spec: <fixed-point>..HEAD`
-- One axis per agent. Never one agent carrying both axes: that is the context
-  pollution the split exists to prevent.
 
 Four rules belong **inside each prompt**, on both routes:
 
@@ -143,33 +141,26 @@ Claude one.
 **Spec prompt** should include:
 
 - The diff command and commit list.
-- The task description and the plan artifacts from step 2, pasted in.
+- The task description and every plan source from step 2, pasted in.
 - The brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding. Under 400 words."
 
 ### 5. Aggregate
 
 Keep the two reports under `## Standards` and `## Spec`, each complete and
-verbatim. Leave findings unmerged and unreranked, because the two axes are
-deliberately separate (see _Why two axes_).
+verbatim, findings unmerged and unreranked. Every axis gets a section, and its
+body is exactly one of: the findings; the line `No findings.`; or
+`Not run: <reason>` (agent failed, axis skipped). An unrun axis says so in those
+words.
 
-End with a one-line summary: total findings per axis, and the worst issue
-_within each axis_. Report each axis on its own terms rather than picking one
-winner across them: that cross-axis ranking is what the separation exists to
-prevent.
+End with `## Summary`: total findings per axis, and the worst issue _within each
+axis_. Report each axis on its own terms rather than picking one winner across
+them.
 
 ### 6. Assemble the record
 
-A markdown body, written to a file under `$BB_THREAD_STORAGE`:
-
-- A header block: repo path and `origin` URL, task key, fixed point as given and
-  its resolved SHA, `HEAD` SHA, the commit list, the reviewer model, and the
-  timestamp.
-- `## Standards` and `## Spec` — each axis's section from step 5.
-- `## Summary` — the per-axis summary line.
-
-Every axis gets a section, and its body is exactly one of: the findings; the line
-`No findings.`; or `Not run: <reason>` (agent failed, axis skipped). An unrun
-axis says so in those words.
+Write the aggregate to a file under `$BB_THREAD_STORAGE`, headed by a block
+carrying repo path and `origin` URL, task key, fixed point as given and its
+resolved SHA, `HEAD` SHA, the commit list, the reviewer model, and the timestamp.
 
 ### 7. Verdict and counts
 
