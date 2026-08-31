@@ -24,6 +24,34 @@ export const TASK_PRIORITIES = [
   "none",
 ] as const;
 
+/**
+ * The durable engineering records a task accumulates. The kind decides which
+ * metadata shape the artifact carries, so the two are always validated
+ * together — see `taskArtifactMetadataSchemas`.
+ */
+export const TASK_ARTIFACT_KINDS = [
+  "approved_plan",
+  "implementation_plan",
+  "decision",
+  "evidence",
+  "review",
+  "review_result",
+] as const;
+
+/** The kinds of check an `evidence` artifact can record. */
+export const TASK_EVIDENCE_KINDS = [
+  "unit",
+  "integration",
+  "e2e",
+  "contract",
+  "static",
+  "type",
+  "architecture",
+  "benchmark",
+  "security",
+  "manual",
+] as const;
+
 export const TASK_THREAD_LIVE_STATUSES = [
   "starting",
   "working",
@@ -70,7 +98,7 @@ const projectPrefixSchema = z
     PROJECT_PREFIX_PATTERN,
     "must be uppercase alphanumeric, start with a letter, and contain at most 10 characters",
   );
-const dueDateSchema = z
+const calendarDateSchema = z
   .string()
   .regex(ISO_DATE_PATTERN)
   .refine((value) => {
@@ -123,7 +151,7 @@ const taskSchema = z
     description: z.string(),
     status: taskStatusSchema,
     priority: taskPrioritySchema,
-    dueDate: dueDateSchema.nullable(),
+    dueDate: calendarDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
     position: z.number(),
     createdAt: z.string(),
@@ -223,6 +251,159 @@ const attachmentSchema = z
   })
   .strict();
 
+/**
+ * An approved or proposed plan: who signed it off, and on what day. The two
+ * plan kinds carry the same shape, so they share one schema.
+ */
+const planArtifactMetadataSchema = z
+  .object({
+    approvedBy: nonBlankStringSchema,
+    approvedAt: calendarDateSchema,
+  })
+  .strict();
+
+/** The decision quartet: what was found, what was chosen, why, and what it costs. */
+const decisionArtifactMetadataSchema = z
+  .object({
+    discovery: nonBlankStringSchema,
+    decision: nonBlankStringSchema,
+    why: nonBlankStringSchema,
+    impact: nonBlankStringSchema,
+  })
+  .strict();
+
+const evidenceArtifactMetadataSchema = z
+  .object({
+    command: nonBlankStringSchema,
+    exitCode: z.number().int(),
+    evidenceKind: z.enum(TASK_EVIDENCE_KINDS),
+  })
+  .strict();
+
+/**
+ * Axis names are open — a project may add a review axis at any time — so the
+ * counts, not the keys, are what this pins down.
+ */
+const reviewResultArtifactMetadataSchema = z
+  .object({
+    verdict: z.enum(["pass", "fail", "mixed"]),
+    findingCounts: z.record(z.string(), z.number().int().nonnegative()),
+  })
+  .strict();
+
+const reviewHunkSchema = z
+  .object({
+    path: nonBlankStringSchema,
+    startLine: z.number().int().min(1),
+    endLine: z.number().int().min(1),
+  })
+  .strict()
+  .refine((hunk) => hunk.endLine >= hunk.startLine, {
+    path: ["endLine"],
+    message: "must not be before startLine",
+  });
+
+/**
+ * One grouped review concern. `evidence` and `decisions` cite other artifacts
+ * of this task by id. `hunks` may be empty for a purely narrative concern.
+ */
+const reviewConcernSchema = z
+  .object({
+    title: nonBlankStringSchema,
+    why: nonBlankStringSchema,
+    evidence: z.array(idSchema),
+    decisions: z.array(idSchema),
+    risks: z.string(),
+    hunks: z.array(reviewHunkSchema),
+  })
+  .strict();
+
+/** A review of a diff range. No concerns is a valid outcome, not an error. */
+const reviewArtifactMetadataSchema = z
+  .object({
+    baseRef: nonBlankStringSchema,
+    headSha: nonBlankStringSchema,
+    environmentId: z.string().startsWith("env_").nullable(),
+    concerns: z.array(reviewConcernSchema),
+  })
+  .strict();
+
+/**
+ * What a metadata object may contain, per kind. This boundary owns the shape;
+ * storage only knows metadata is a JSON object. Reads validate against the
+ * same schemas as writes — every write passes here, so a row that fails to
+ * parse is a broken invariant and should be loud.
+ */
+const taskArtifactMetadataSchemas = {
+  approved_plan: planArtifactMetadataSchema,
+  implementation_plan: planArtifactMetadataSchema,
+  decision: decisionArtifactMetadataSchema,
+  evidence: evidenceArtifactMetadataSchema,
+  review: reviewArtifactMetadataSchema,
+  review_result: reviewResultArtifactMetadataSchema,
+} as const satisfies Record<TaskArtifactKind, z.ZodType>;
+
+const taskArtifactBaseShape = {
+  id: idSchema,
+  taskId: idSchema,
+  title: z.string(),
+  body: z.string().nullable(),
+  externalUrl: z.string().nullable(),
+  attachmentId: idSchema.nullable(),
+  sourceThreadId: z.string().startsWith("thr_").nullable(),
+  createdAt: z.string(),
+};
+
+const createTaskArtifactBaseShape = {
+  taskId: idSchema,
+  title: nonBlankStringSchema,
+  body: z.string().optional(),
+  externalUrl: z.string().optional(),
+  attachmentId: idSchema.optional(),
+  sourceThreadId: z.string().startsWith("thr_").optional(),
+};
+
+/**
+ * One arm of an artifact union: the shared fields, plus the one metadata shape
+ * this kind is allowed to carry. Both the read DTO and the create input are
+ * built from this, so a kind can never gain a metadata shape on one side only.
+ */
+function taskArtifactVariant<
+  Shape extends z.ZodRawShape,
+  Kind extends TaskArtifactKind,
+>(shape: Shape, kind: Kind) {
+  return z
+    .object({
+      ...shape,
+      kind: z.literal(kind),
+      metadata: taskArtifactMetadataSchemas[kind],
+    })
+    .strict();
+}
+
+/**
+ * The artifact as read. `kind` and `metadata` are typed together, so a
+ * consumer that narrows on `kind` gets the metadata shape for free.
+ */
+export const taskArtifactSchema = z.discriminatedUnion("kind", [
+  taskArtifactVariant(taskArtifactBaseShape, "approved_plan"),
+  taskArtifactVariant(taskArtifactBaseShape, "implementation_plan"),
+  taskArtifactVariant(taskArtifactBaseShape, "decision"),
+  taskArtifactVariant(taskArtifactBaseShape, "evidence"),
+  taskArtifactVariant(taskArtifactBaseShape, "review"),
+  taskArtifactVariant(taskArtifactBaseShape, "review_result"),
+]);
+
+/** Written as one union so an `evidence` artifact cannot carry `decision` metadata. */
+const createTaskArtifactInputSchema = z.discriminatedUnion("kind", [
+  taskArtifactVariant(createTaskArtifactBaseShape, "approved_plan"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "implementation_plan"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "decision"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "evidence"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "review"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "review_result"),
+]);
+
 const taskThreadSchema = z
   .object({
     id: idSchema,
@@ -286,6 +467,7 @@ const tasksDomainErrorSchema = z
       "project_not_empty",
       "project_prefix_conflict",
       "attachment_referenced",
+      "artifact_attachment_mismatch",
     ]),
     message: z.string(),
   })
@@ -293,6 +475,11 @@ const tasksDomainErrorSchema = z
 
 const taskMutationResultSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), task: taskSchema }).strict(),
+  z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
+]);
+
+const taskArtifactMutationResultSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), artifact: taskArtifactSchema }).strict(),
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
 
@@ -350,7 +537,7 @@ const updateTaskInputSchema = z
     description: z.string().optional(),
     status: taskStatusSchema.optional(),
     priority: taskPrioritySchema.optional(),
-    dueDate: dueDateSchema.nullable().optional(),
+    dueDate: calendarDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
@@ -533,7 +720,7 @@ export const tasksRpcContract = defineRpcContract({
         description: z.string().default(""),
         status: taskStatusSchema.default("backlog"),
         priority: taskPrioritySchema.default("none"),
-        dueDate: dueDateSchema.nullable().default(null),
+        dueDate: calendarDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
         labelIds: taskLabelsSchema.default([]),
       })
@@ -684,6 +871,25 @@ export const tasksRpcContract = defineRpcContract({
       })
       .strict(),
     output: attachmentDeleteResultSchema,
+  },
+  createArtifact: {
+    input: createTaskArtifactInputSchema,
+    output: taskArtifactMutationResultSchema,
+  },
+  // `kinds` omitted means every kind; an explicitly empty array means no
+  // kinds, and returns nothing.
+  listArtifacts: {
+    input: z
+      .object({
+        taskId: idSchema,
+        kinds: z.array(z.enum(TASK_ARTIFACT_KINDS)).optional(),
+      })
+      .strict(),
+    output: z.object({ artifacts: z.array(taskArtifactSchema) }).strict(),
+  },
+  deleteArtifact: {
+    input: z.object({ artifactId: idSchema }).strict(),
+    output: z.object({ deleted: z.boolean() }).strict(),
   },
   listTaskThreads: {
     input: z.object({ taskId: idSchema }).strict(),
@@ -837,6 +1043,12 @@ export type Comment = z.infer<typeof commentSchema>;
 export type CommentProvider = z.infer<typeof commentProviderSchema>;
 export type DisplayComment = z.infer<typeof displayCommentSchema>;
 export type Attachment = z.infer<typeof attachmentSchema>;
+export type TaskArtifactKind = (typeof TASK_ARTIFACT_KINDS)[number];
+export type TaskEvidenceKind = (typeof TASK_EVIDENCE_KINDS)[number];
+export type TaskArtifact = z.infer<typeof taskArtifactSchema>;
+export type CreateTaskArtifactInput = z.infer<
+  typeof createTaskArtifactInputSchema
+>;
 export type TaskThread = z.infer<typeof taskThreadSchema>;
 export type TaskPullRequest = z.infer<typeof taskPullRequestSchema>;
 export type Preset = z.infer<typeof presetSchema>;

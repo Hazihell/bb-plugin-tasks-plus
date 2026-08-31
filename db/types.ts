@@ -5,24 +5,15 @@ import type {
   PresetReasoningLevel,
   PresetServiceTier,
   TASK_THREAD_LIVE_STATUSES,
+  TaskArtifactKind,
   TaskPriority,
   TaskStatus,
 } from "../shared/contract.js";
 
-export type { TaskPriority, TaskStatus };
+export { TASK_ARTIFACT_KINDS } from "../shared/contract.js";
+export type { TaskArtifactKind, TaskPriority, TaskStatus };
 
 type CommentKind = "user" | "agent" | "system";
-
-export const TASK_ARTIFACT_KINDS = [
-  "approved_plan",
-  "implementation_plan",
-  "decision",
-  "evidence",
-  "review",
-  "review_result",
-] as const;
-
-export type TaskArtifactKind = (typeof TASK_ARTIFACT_KINDS)[number];
 
 export type TaskThreadLiveStatus = (typeof TASK_THREAD_LIVE_STATUSES)[number];
 

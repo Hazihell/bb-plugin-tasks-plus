@@ -6,7 +6,10 @@ import {
 } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it, vi } from "vitest";
 import { buildAttachmentUrl, registerAttachments } from "../attachments";
-import { tasksRpcContract } from "../shared/contract";
+import {
+  TASK_ARTIFACT_KINDS,
+  tasksRpcContract,
+} from "../shared/contract";
 import { createComment, createStore, registerTasksApi } from ".";
 
 describe("Tasks RPC domain API", () => {
@@ -1629,6 +1632,361 @@ describe("Tasks RPC domain API", () => {
     ).toEqual({ blockers: [], unresolvedCount: 0 });
 
     await harness.dispose();
+  });
+
+  describe("task artifacts", () => {
+    async function setUpArtifacts() {
+      const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+      const store = createStore(bb);
+      registerAttachments(bb, store.tasks);
+      registerTasksApi(bb, store);
+      const project = store.tasks.createProject({
+        name: "Artifacts",
+        prefix: "ART",
+        color: "blue",
+      });
+      const task = store.tasks.createTask({
+        projectId: project.id,
+        title: "Carry a record",
+      });
+      return { bb, harness, store, project, task };
+    }
+
+    /** One realistic metadata object per kind; `citedId` must be a real ULID. */
+    function validMetadata(citedId: string) {
+      return {
+        approved_plan: { approvedBy: "Roger", approvedAt: "2026-08-30" },
+        implementation_plan: { approvedBy: "Roger", approvedAt: "2026-08-29" },
+        decision: {
+          discovery: "The store already validates attachment ownership",
+          decision: "Translate it at the RPC boundary",
+          why: "Callers need a typed outcome, not a thrown error",
+          impact: "One more domain error code",
+        },
+        evidence: {
+          command: "npm test",
+          exitCode: 0,
+          evidenceKind: "unit" as const,
+        },
+        review: {
+          baseRef: "main",
+          headSha: "0f2c19a",
+          environmentId: "env_amhbcapb7g",
+          concerns: [
+            {
+              title: "Metadata is unvalidated below the boundary",
+              why: "Storage only knows it is a JSON object",
+              evidence: [citedId],
+              decisions: [citedId],
+              risks: "",
+              hunks: [{ path: "api/index.ts", startLine: 3, endLine: 9 }],
+            },
+          ],
+        },
+        review_result: {
+          verdict: "mixed" as const,
+          findingCounts: { Standards: 2, Spec: 0 },
+        },
+      };
+    }
+
+    it("accepts and round-trips valid metadata for every kind", async () => {
+      const { harness, task } = await setUpArtifacts();
+      const seed = tasksRpcContract.createArtifact.output.parse(
+        await harness.callRpc("createArtifact", {
+          taskId: task.id,
+          kind: "decision",
+          title: "Seed decision",
+          metadata: validMetadata(task.id).decision,
+        }),
+      );
+      if (!seed.ok) throw new Error("seed artifact was rejected");
+      const metadata = validMetadata(seed.artifact.id);
+
+      for (const kind of TASK_ARTIFACT_KINDS) {
+        const result = tasksRpcContract.createArtifact.output.parse(
+          await harness.callRpc("createArtifact", {
+            taskId: task.id,
+            kind,
+            title: `A ${kind}`,
+            metadata: metadata[kind],
+          }),
+        );
+        expect(result).toMatchObject({
+          ok: true,
+          artifact: { kind, title: `A ${kind}`, metadata: metadata[kind] },
+        });
+      }
+
+      await harness.dispose();
+    });
+
+    it("rejects malformed metadata for every kind", async () => {
+      const { harness, task } = await setUpArtifacts();
+      const malformed = {
+        // A missing required field.
+        approved_plan: { approvedBy: "Roger" },
+        // An unknown extra key.
+        implementation_plan: {
+          approvedBy: "Roger",
+          approvedAt: "2026-08-29",
+          approvedFor: "posterity",
+        },
+        // A wrong type.
+        decision: {
+          discovery: "x",
+          decision: 42,
+          why: "x",
+          impact: "x",
+        },
+        // A member outside the evidence enum.
+        evidence: { command: "npm test", exitCode: 0, evidenceKind: "smoke" },
+        // A hunk that ends before it starts.
+        review: {
+          baseRef: "main",
+          headSha: "0f2c19a",
+          environmentId: null,
+          concerns: [
+            {
+              title: "Backwards hunk",
+              why: "x",
+              evidence: [],
+              decisions: [],
+              risks: "",
+              hunks: [{ path: "api/index.ts", startLine: 9, endLine: 3 }],
+            },
+          ],
+        },
+        // A negative finding count.
+        review_result: { verdict: "pass", findingCounts: { Standards: -1 } },
+      };
+
+      for (const kind of TASK_ARTIFACT_KINDS) {
+        await expect(
+          harness.callRpc("createArtifact", {
+            taskId: task.id,
+            kind,
+            title: `A bad ${kind}`,
+            metadata: malformed[kind],
+          } as never),
+        ).rejects.toMatchObject({ code: "invalid_input" });
+      }
+
+      expect(
+        tasksRpcContract.listArtifacts.output.parse(
+          await harness.callRpc("listArtifacts", { taskId: task.id }),
+        ).artifacts,
+      ).toEqual([]);
+      await harness.dispose();
+    });
+
+    it("refuses metadata belonging to another kind", async () => {
+      const { harness, task } = await setUpArtifacts();
+
+      await expect(
+        harness.callRpc("createArtifact", {
+          taskId: task.id,
+          kind: "evidence",
+          title: "Evidence with a decision inside",
+          metadata: validMetadata(task.id).decision,
+        } as never),
+      ).rejects.toMatchObject({ code: "invalid_input" });
+
+      await harness.dispose();
+    });
+
+    it("refuses an attachment that belongs to another task", async () => {
+      const { harness, store, project, task } = await setUpArtifacts();
+      const other = store.tasks.createTask({
+        projectId: project.id,
+        title: "Owns the attachment",
+      });
+      const uploaded = await harness.fetchHttp(
+        "POST",
+        `/attachments/upload?taskId=${other.id}&fileName=log.txt&mime=text%2Fplain`,
+        { body: "log", headers: { "content-type": "text/plain" } },
+      );
+      const { attachmentId } = (await uploaded.json()) as {
+        attachmentId: string;
+      };
+      const signalsBefore = harness.realtimeSignals.length;
+
+      const result = tasksRpcContract.createArtifact.output.parse(
+        await harness.callRpc("createArtifact", {
+          taskId: task.id,
+          kind: "evidence",
+          title: "Someone else's log",
+          attachmentId,
+          metadata: validMetadata(task.id).evidence,
+        }),
+      );
+
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: "artifact_attachment_mismatch",
+          message: "A task artifact attachment must belong to the same task",
+        },
+      });
+      expect(store.tasks.listTaskArtifacts(task.id)).toEqual([]);
+      expect(harness.realtimeSignals).toHaveLength(signalsBefore);
+      await harness.dispose();
+    });
+
+    it("accepts an attachment of its own task, including one on a comment", async () => {
+      const { harness, store, task } = await setUpArtifacts();
+      const comment = store.tasks.createComment({
+        taskId: task.id,
+        kind: "user",
+        authorName: "You",
+        body: "Run output",
+      });
+      const taskUpload = await harness.fetchHttp(
+        "POST",
+        `/attachments/upload?taskId=${task.id}&fileName=task.txt&mime=text%2Fplain`,
+        { body: "task blob", headers: { "content-type": "text/plain" } },
+      );
+      const commentUpload = await harness.fetchHttp(
+        "POST",
+        `/attachments/upload?commentId=${comment.id}&fileName=comment.txt&mime=text%2Fplain`,
+        { body: "comment blob", headers: { "content-type": "text/plain" } },
+      );
+      const taskAttachmentId = (
+        (await taskUpload.json()) as { attachmentId: string }
+      ).attachmentId;
+      const commentAttachmentId = (
+        (await commentUpload.json()) as { attachmentId: string }
+      ).attachmentId;
+
+      for (const attachmentId of [taskAttachmentId, commentAttachmentId]) {
+        const result = tasksRpcContract.createArtifact.output.parse(
+          await harness.callRpc("createArtifact", {
+            taskId: task.id,
+            kind: "evidence",
+            title: "Own attachment",
+            attachmentId,
+            metadata: validMetadata(task.id).evidence,
+          }),
+        );
+        expect(result).toMatchObject({ ok: true, artifact: { attachmentId } });
+      }
+
+      await harness.dispose();
+    });
+
+    it("publishes tasks:changed on create and deletes idempotently", async () => {
+      const { harness, store, project, task } = await setUpArtifacts();
+      const created = tasksRpcContract.createArtifact.output.parse(
+        await harness.callRpc("createArtifact", {
+          taskId: task.id,
+          kind: "review_result",
+          title: "Round one",
+          metadata: validMetadata(task.id).review_result,
+        }),
+      );
+      if (!created.ok) throw new Error("artifact was rejected");
+      expect(harness.realtimeSignals.at(-1)).toEqual({
+        channel: "tasks:changed",
+        payload: { taskId: task.id, projectId: project.id },
+      });
+
+      harness.realtimeSignals.length = 0;
+      expect(
+        tasksRpcContract.deleteArtifact.output.parse(
+          await harness.callRpc("deleteArtifact", {
+            artifactId: created.artifact.id,
+          }),
+        ),
+      ).toEqual({ deleted: true });
+      expect(harness.realtimeSignals).toEqual([
+        {
+          channel: "tasks:changed",
+          payload: { taskId: task.id, projectId: project.id },
+        },
+      ]);
+      expect(store.tasks.getTaskArtifact(created.artifact.id)).toBeUndefined();
+
+      harness.realtimeSignals.length = 0;
+      expect(
+        tasksRpcContract.deleteArtifact.output.parse(
+          await harness.callRpc("deleteArtifact", {
+            artifactId: created.artifact.id,
+          }),
+        ),
+      ).toEqual({ deleted: false });
+      expect(harness.realtimeSignals).toEqual([]);
+      await harness.dispose();
+    });
+
+    it("lists by kind, ordered by kind then creation", async () => {
+      const { harness, store, task } = await setUpArtifacts();
+      const metadata = validMetadata(task.id);
+      for (const kind of ["evidence", "approved_plan", "decision"] as const) {
+        const result = tasksRpcContract.createArtifact.output.parse(
+          await harness.callRpc("createArtifact", {
+            taskId: task.id,
+            kind,
+            title: `A ${kind}`,
+            metadata: metadata[kind],
+          }),
+        );
+        if (!result.ok) throw new Error(`${kind} artifact was rejected`);
+      }
+
+      // Within a kind, creation time orders and id breaks a tie. A frozen
+      // clock makes every one of these a tie, and the ids are written in
+      // descending order, so a listing that merely preserved insertion order
+      // would come back reversed.
+      const decisionIds = [
+        "01ARTFCT00000000000000001Z",
+        "01ARTFCT00000000000000002Z",
+        "01ARTFCT00000000000000003Z",
+      ];
+      vi.useFakeTimers();
+      try {
+        for (const id of [...decisionIds].reverse()) {
+          store.tasks.createTaskArtifact({
+            id,
+            taskId: task.id,
+            kind: "decision",
+            title: `Decision ${id}`,
+            metadata: metadata.decision,
+          });
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const listed = async (kinds?: readonly string[]) =>
+        tasksRpcContract.listArtifacts.output.parse(
+          await harness.callRpc("listArtifacts", {
+            taskId: task.id,
+            ...(kinds === undefined ? {} : { kinds: kinds as never }),
+          }),
+        ).artifacts;
+      const list = async (kinds?: readonly string[]) =>
+        (await listed(kinds)).map((artifact) => artifact.kind);
+
+      expect(await list()).toEqual([
+        "approved_plan",
+        "decision",
+        "decision",
+        "decision",
+        "decision",
+        "evidence",
+      ]);
+      expect(
+        (await listed(["decision"]))
+          .map((artifact) => artifact.id)
+          .filter((id) => decisionIds.includes(id)),
+      ).toEqual(decisionIds);
+      expect(await list(["evidence", "approved_plan"])).toEqual([
+        "approved_plan",
+        "evidence",
+      ]);
+      expect(await list([])).toEqual([]);
+      await harness.dispose();
+    });
   });
 
   it("rejects self, direct, and multi-hop cycles through the blocker RPC", async () => {
