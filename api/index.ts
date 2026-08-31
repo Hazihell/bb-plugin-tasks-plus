@@ -1,5 +1,6 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import {
+  BuiltinPresetError,
   createTasksStore,
   TaskArtifactAttachmentMismatchError,
   TaskBlockerCycleError,
@@ -174,6 +175,26 @@ function fail(code: TasksDomainError["code"], message: string): never {
 
 function taskFailure(error: TasksDomainFailure) {
   return { ok: false as const, error: error.detail };
+}
+
+function runPresetMutation<T>(mutation: () => T): T {
+  try {
+    return mutation();
+  } catch (error) {
+    if (error instanceof BuiltinPresetError) {
+      fail("preset_builtin", error.message);
+    }
+    throw error;
+  }
+}
+
+function rpcPresetMutation<T>(mutation: () => T) {
+  try {
+    return runPresetMutation(mutation);
+  } catch (error) {
+    if (error instanceof TasksDomainFailure) return taskFailure(error);
+    throw error;
+  }
 }
 
 function statusName(status: TaskStatus): string {
@@ -1271,5 +1292,14 @@ export function registerHandlers(
 }
 
 export function registerTasksApi(bb: BbPluginApi, store: TasksApiStore): void {
-  bb.rpc.register(tasksRpcContract, registerHandlers(bb, store));
+  const handlers = registerHandlers(bb, store);
+  bb.rpc.register(tasksRpcContract, {
+    ...handlers,
+    updatePreset(input) {
+      return rpcPresetMutation(() => handlers.updatePreset(input));
+    },
+    deletePreset(input) {
+      return rpcPresetMutation(() => handlers.deletePreset(input));
+    },
+  });
 }

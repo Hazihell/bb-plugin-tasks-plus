@@ -8,9 +8,9 @@ description: Tasks Plus is this user's issue tracker. Use when asked to work on 
 Use the `bb tasks-plus` CLI to understand the assigned task, keep its record useful,
 and report the outcome where the work is tracked.
 
-Delegation presets are user-defined; Tasks ships with none. Before dispatching
-work, use `bb tasks-plus preset list` and create a preset if the required one does
-not already exist. Dispatch requires an existing preset.
+Dispatch requires a preset. One ships with the plugin — `implement`, below — and
+is the default choice; the rest are user-defined. Use `bb tasks-plus preset list`
+and create one when the work needs a different model or permission level.
 
 Create or update the same execution selection exposed in the Tasks UI with
 `--provider`, `--model`, `--reasoning`, and optional
@@ -23,6 +23,22 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
 ```
 
 `preset update` accepts the same flags; `--service-tier none` clears a tier.
+
+### The implement preset
+
+A preset's instructions ride on every seed prompt it dispatches, so a working
+thread's lifecycle belongs in the preset, not in each task description. The
+shipped `implement` preset is that lifecycle: one thread owns the task end to end
+— read, investigate, plan as an artifact, build test-first, evidence and
+decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` —
+and never splits it into new tasks. It names only skills this plugin bundles, so
+it works on an install with no personal skills at all.
+
+The plugin owns its name and its instructions: seeded on first open, restored on
+every later open, and refused for editing or deletion. Everything else — provider,
+model, reasoning, permission, environment — is yours to change, in the UI or with
+`preset update`, and survives every refresh. `bb tasks-plus preset show implement`
+prints the live text.
 
 ## Work a task
 

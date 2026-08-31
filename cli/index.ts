@@ -6,6 +6,7 @@ import type {
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
+import { BuiltinPresetError } from "../db";
 import {
   createComment,
   publishProjectsChanged,
@@ -2255,34 +2256,45 @@ async function runPreset(domain: TasksDomain, argv: string[]): Promise<string> {
     const baseBranch = option(args, "base-branch");
     const machine = option(args, "machine");
     validatePresetTargetOptions({ environmentKind, baseBranch, machine });
-    const result = tasksRpcContract.updatePreset.output.parse(
-      await domain.updatePreset(
-        tasksRpcContract.updatePreset.input.parse({
-          presetId: preset.id,
-          name: option(args, "name"),
-          providerId: option(args, "provider"),
-          modelId: option(args, "model"),
-          reasoningLevel: option(args, "reasoning"),
-          serviceTier: parsePresetServiceTier(option(args, "service-tier")),
-          permissionMode: option(args, "permission"),
-          environmentKind:
-            environmentOption === undefined ? undefined : environmentKind,
-          baseBranch:
-            environmentOption !== undefined &&
-            environmentKind === "project-default"
-              ? null
-              : baseBranch,
-          machineId:
-            environmentOption !== undefined &&
-            environmentKind === "project-default"
-              ? null
-              : machine === undefined
-                ? undefined
-                : await resolveMachineId(domain, machine),
-          instructions: option(args, "instructions"),
-        }),
-      ),
-    );
+    let result: ReturnType<
+      typeof tasksRpcContract.updatePreset.output.parse
+    >;
+    try {
+      result = tasksRpcContract.updatePreset.output.parse(
+        await domain.updatePreset(
+          tasksRpcContract.updatePreset.input.parse({
+            presetId: preset.id,
+            name: option(args, "name"),
+            providerId: option(args, "provider"),
+            modelId: option(args, "model"),
+            reasoningLevel: option(args, "reasoning"),
+            serviceTier: parsePresetServiceTier(option(args, "service-tier")),
+            permissionMode: option(args, "permission"),
+            environmentKind:
+              environmentOption === undefined ? undefined : environmentKind,
+            baseBranch:
+              environmentOption !== undefined &&
+              environmentKind === "project-default"
+                ? null
+                : baseBranch,
+            machineId:
+              environmentOption !== undefined &&
+              environmentKind === "project-default"
+                ? null
+                : machine === undefined
+                  ? undefined
+                  : await resolveMachineId(domain, machine),
+            instructions: option(args, "instructions"),
+          }),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof BuiltinPresetError) {
+        throw new CliError(error.message);
+      }
+      throw error;
+    }
+    if ("ok" in result) throw new CliError(result.error.message);
     return args.flags.has("json")
       ? JSON.stringify(result)
       : `Updated preset ${result.preset.name}  ${result.preset.id}`;
@@ -2296,11 +2308,22 @@ async function runPreset(domain: TasksDomain, argv: string[]): Promise<string> {
       "bb tasks-plus preset delete <name-or-id> [--json]",
     );
     const preset = resolvePreset(await listPresets(domain), address!);
-    const result = tasksRpcContract.deletePreset.output.parse(
-      await domain.deletePreset(
-        tasksRpcContract.deletePreset.input.parse({ presetId: preset.id }),
-      ),
-    );
+    let result: ReturnType<
+      typeof tasksRpcContract.deletePreset.output.parse
+    >;
+    try {
+      result = tasksRpcContract.deletePreset.output.parse(
+        await domain.deletePreset(
+          tasksRpcContract.deletePreset.input.parse({ presetId: preset.id }),
+        ),
+      );
+    } catch (error) {
+      if (error instanceof BuiltinPresetError) {
+        throw new CliError(error.message);
+      }
+      throw error;
+    }
+    if ("ok" in result) throw new CliError(result.error.message);
     return args.flags.has("json")
       ? JSON.stringify({ ...result, preset })
       : `Deleted preset ${preset.name}`;

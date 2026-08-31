@@ -167,7 +167,8 @@ interface DispatchControlProps {
  * on wide layouts and in the inline property row when the rail is hidden.
  * GitHub-merge-style split button around the dispatch RPC: the primary
  * segment dispatches immediately with the last-used preset (persisted in
- * localStorage; first preset alphabetically as the fallback), the chevron
+ * localStorage; the builtin preset, then the first alphabetically, as the
+ * fallback), the chevron
  * segment opens the preset menu, which also updates the remembered choice.
  * The label is just the preset name — the dropdown's "Dispatch with preset"
  * header carries the verb. With zero presets it collapses to an
@@ -241,8 +242,11 @@ export function DispatchControl({
     );
   }
 
+  // Nothing remembered yet lands on the preset that ships with the plugin —
+  // the one every install has — before falling back to alphabetical order.
   const current =
     presets?.find((preset) => preset.id === lastPresetId) ??
+    presets?.find((preset) => preset.builtin) ??
     (presets
       ? [...presets].sort((a, b) => a.name.localeCompare(b.name))[0]
       : undefined);

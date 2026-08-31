@@ -65,6 +65,103 @@ describe("tasks storage", () => {
     }
   });
 
+  it("seeds, refreshes, adopts, and idempotently reopens the builtin preset", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const seeded = store
+        .listPresets()
+        .find((preset) => preset.name === "implement");
+      expect(seeded).toMatchObject({
+        name: "implement",
+        providerId: "claude-code",
+        modelId: "claude-opus-5[1m]",
+        reasoningLevel: "medium",
+        serviceTier: null,
+        permissionMode: "full",
+        environmentKind: "new-worktree",
+        baseBranch: null,
+        machineId: null,
+        builtin: true,
+      });
+      expect(seeded?.instructions).toContain("You are the working thread");
+      if (!seeded) throw new Error("expected seeded implement preset");
+
+      store.updatePreset(seeded.id, { modelId: "user-selected-model" });
+      expect(createTasksStore(db).getPreset(seeded.id)).toMatchObject({
+        modelId: "user-selected-model",
+        instructions: seeded.instructions,
+        builtin: true,
+      });
+
+      db.prepare(
+        `
+          UPDATE presets
+          SET provider_id = 'codex', model_id = 'gpt-5', reasoning_level = 'high',
+              service_tier = 'fast', permission_mode = 'auto',
+              environment_kind = 'project-default', base_branch = 'main',
+              machine_id = 'host_machine', instructions = 'drifted', builtin = 0
+          WHERE id = ?
+        `,
+      ).run(seeded.id);
+
+      const refreshedStore = createTasksStore(db);
+      const refreshed = refreshedStore.getPreset(seeded.id);
+      expect(refreshed).toMatchObject({
+        id: seeded.id,
+        name: "implement",
+        providerId: "codex",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
+        serviceTier: "fast",
+        permissionMode: "auto",
+        environmentKind: "project-default",
+        baseBranch: "main",
+        machineId: "host_machine",
+        instructions: seeded.instructions,
+        builtin: true,
+      });
+
+      const createdAt = refreshed?.createdAt;
+      const reopenedStore = createTasksStore(db);
+      expect(reopenedStore.listPresets()).toHaveLength(1);
+      expect(reopenedStore.getPreset(seeded.id)?.createdAt).toBe(createdAt);
+
+      db.prepare("DELETE FROM presets WHERE id = ?").run(seeded.id);
+      const userPreset = reopenedStore.createPreset({
+        name: "IMPLEMENT",
+        providerId: "codex",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
+        serviceTier: null,
+        permissionMode: "accept-edits",
+        environmentKind: "project-default",
+        baseBranch: null,
+        machineId: null,
+        instructions: "User-owned text",
+      });
+
+      const adoptedStore = createTasksStore(db);
+      const adopted = adoptedStore.getPreset(userPreset.id);
+      expect(adopted).toMatchObject({
+        id: userPreset.id,
+        name: "implement",
+        providerId: "codex",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
+        serviceTier: null,
+        permissionMode: "accept-edits",
+        environmentKind: "project-default",
+        baseBranch: null,
+        machineId: null,
+        instructions: seeded.instructions,
+        builtin: true,
+      });
+      expect(adoptedStore.listPresets()).toHaveLength(1);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("migrates existing presets to the project-default environment", async () => {
     const { db, harness } = setup();
     try {
@@ -775,6 +872,73 @@ describe("tasks storage", () => {
         id: later.id,
         threadId: "thr_later",
       });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("protects builtin contract fields while allowing execution and custom fields to change", async () => {
+    const { harness, store } = setup();
+    try {
+      const builtin = store
+        .listPresets()
+        .find((preset) => preset.name === "implement");
+      if (!builtin) throw new Error("expected seeded implement preset");
+
+      expect(
+        store.updatePreset(builtin.id, {
+          modelId: "user-selected-model",
+          name: builtin.name,
+          instructions: builtin.instructions,
+        }),
+      ).toMatchObject({
+        modelId: "user-selected-model",
+        name: "implement",
+        instructions: builtin.instructions,
+        builtin: true,
+      });
+      expect(() =>
+        store.updatePreset(builtin.id, { instructions: "changed" }),
+      ).toThrow("ships with the plugin");
+      expect(() =>
+        store.updatePreset(builtin.id, { name: "User preset" }),
+      ).toThrow("ships with the plugin");
+      expect(() => store.deletePreset(builtin.id)).toThrow(
+        "ships with the plugin",
+      );
+      expect(store.getPreset(builtin.id)).toMatchObject({
+        name: "implement",
+        modelId: "user-selected-model",
+        instructions: builtin.instructions,
+        builtin: true,
+      });
+
+      const custom = store.createPreset({
+        name: "Custom",
+        providerId: "openai",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
+        serviceTier: null,
+        permissionMode: "accept-edits",
+        environmentKind: "project-default",
+        baseBranch: null,
+        machineId: null,
+        instructions: "Work the task.",
+      });
+      expect(
+        store.updatePreset(custom.id, {
+          instructions: "Updated instructions",
+          name: "Custom renamed",
+          modelId: "custom-model",
+        }),
+      ).toMatchObject({
+        instructions: "Updated instructions",
+        name: "Custom renamed",
+        modelId: "custom-model",
+        builtin: false,
+      });
+      expect(store.deletePreset(custom.id)).toBe(true);
+      expect(store.getPreset(custom.id)).toBeUndefined();
     } finally {
       await harness.dispose();
     }

@@ -285,8 +285,9 @@ function PresetsSection() {
   const [error, setError] = useState<string | null>(null);
 
   const save = async (editing: Preset | null, draft: PresetDraft) => {
-    await savePresetDraft(rpc, editing, draft);
-    presets.refresh();
+    const error = await savePresetDraft(rpc, editing, draft);
+    if (error === null) presets.refresh();
+    return error;
   };
 
   return (
@@ -333,6 +334,11 @@ function PresetsSection() {
                         className="size-3.5 text-muted-foreground"
                       />
                       {preset.name}
+                      {preset.builtin ? (
+                        <span className="text-2xs text-muted-foreground">
+                          ships with the plugin
+                        </span>
+                      ) : null}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
@@ -374,23 +380,34 @@ function PresetsSection() {
                       >
                         <Icon name="Edit" className="size-3.5" />
                       </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-6 text-muted-foreground hover:text-destructive"
-                        aria-label={`Delete preset ${preset.name}`}
-                        onClick={() => {
-                          setError(null);
-                          rpc
-                            .call("deletePreset", { presetId: preset.id })
-                            .then(() => presets.refresh())
-                            .catch((deleteError: unknown) =>
-                              setError(describeError(deleteError)),
-                            );
-                        }}
-                      >
-                        <Icon name="Trash2" className="size-3.5" />
-                      </Button>
+                      {/* A builtin preset is reseeded from the shipped
+                          definition and the server refuses to delete it —
+                          the row leaves that action out. */}
+                      {preset.builtin ? null : (
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-6 text-muted-foreground hover:text-destructive"
+                          aria-label={`Delete preset ${preset.name}`}
+                          onClick={() => {
+                            setError(null);
+                            rpc
+                              .call("deletePreset", { presetId: preset.id })
+                              .then((result) => {
+                                if ("ok" in result) {
+                                  setError(result.error.message);
+                                  return;
+                                }
+                                presets.refresh();
+                              })
+                              .catch((deleteError: unknown) =>
+                                setError(describeError(deleteError)),
+                              );
+                          }}
+                        >
+                          <Icon name="Trash2" className="size-3.5" />
+                        </Button>
+                      )}
                     </span>
                   </td>
                 </tr>

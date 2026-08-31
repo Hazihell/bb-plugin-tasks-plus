@@ -128,7 +128,12 @@ export async function savePresetDraft(
   rpc: TasksRpc,
   editing: Preset | null,
   draft: PresetDraft,
-): Promise<void> {
+): Promise<string | null> {
+  // The plugin owns a builtin's name and instructions; the server refuses a
+  // save that changes either, so an edit sends back the stored contract text.
+  const contract = editing?.builtin
+    ? { name: editing.name, instructions: editing.instructions }
+    : { name: draft.name.trim(), instructions: draft.instructions };
   // The contract rejects a branch/machine on project-default presets, and a
   // kind switch must not leave stale targets behind — always send explicit
   // nulls outside new-worktree.
@@ -136,7 +141,7 @@ export async function savePresetDraft(
   const baseBranch = draft.baseBranch.trim();
   const machineId = draft.machineId.trim();
   const fields = {
-    name: draft.name.trim(),
+    ...contract,
     providerId: draft.providerId.trim(),
     modelId: draft.modelId.trim(),
     reasoningLevel: draft.reasoningLevel,
@@ -145,13 +150,17 @@ export async function savePresetDraft(
     environmentKind: draft.environmentKind,
     baseBranch: worktree && baseBranch !== "" ? baseBranch : null,
     machineId: worktree && machineId !== "" ? machineId : null,
-    instructions: draft.instructions,
   };
   if (editing) {
-    await rpc.call("updatePreset", { presetId: editing.id, ...fields });
+    const result = await rpc.call("updatePreset", {
+      presetId: editing.id,
+      ...fields,
+    });
+    if ("ok" in result) return result.error.message;
   } else {
     await rpc.call("createPreset", fields);
   }
+  return null;
 }
 
 export function PresetDialog({
@@ -164,7 +173,7 @@ export function PresetDialog({
   onOpenChange: (open: boolean) => void;
   /** Preset being edited, or null to create. */
   editing: Preset | null;
-  onSave: (draft: PresetDraft) => Promise<void>;
+  onSave: (draft: PresetDraft) => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState<PresetDraft>(
     editing ? presetDraft(editing) : EMPTY_PRESET_DRAFT,
@@ -180,6 +189,9 @@ export function PresetDialog({
   );
   const machines = machinesQuery.data;
 
+  // A builtin's name and instructions belong to the plugin; every execution
+  // field below is the user's to change.
+  const builtin = editing?.builtin === true;
   const canSubmit =
     draft.name.trim() !== "" &&
     draft.providerId.trim() !== "" &&
@@ -210,13 +222,17 @@ export function PresetDialog({
         </DialogHeader>
         <div className="space-y-4">
           <Field label="Name">
-            <Input
-              autoFocus
-              value={draft.name}
-              placeholder="e.g. Sonnet · high"
-              onChange={(event) => set("name", event.target.value)}
-              className="h-8"
-            />
+            {builtin ? (
+              <p className="text-sm">{draft.name}</p>
+            ) : (
+              <Input
+                autoFocus
+                value={draft.name}
+                placeholder="e.g. Sonnet · high"
+                onChange={(event) => set("name", event.target.value)}
+                className="h-8"
+              />
+            )}
           </Field>
           <Field label="Provider, model, and reasoning">
             <ProviderModelPicker
@@ -334,14 +350,28 @@ export function PresetDialog({
               </Field>
             </div>
           ) : null}
-          <Field label="Instructions">
-            <Textarea
-              value={draft.instructions}
-              placeholder="Extra instructions prepended to dispatched threads"
-              onChange={(event) => set("instructions", event.target.value)}
-              className="min-h-20 text-xs"
-            />
-          </Field>
+          {builtin ? (
+            <Field
+              label="Instructions"
+              hint="The contract text ships with the plugin."
+            >
+              {/* Multi-paragraph prose with a numbered list — rendered
+                  pre-wrapped so its line breaks survive, and scrolling so a
+                  long contract cannot push the footer off screen. */}
+              <p className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs text-muted-foreground">
+                {draft.instructions === "" ? "—" : draft.instructions}
+              </p>
+            </Field>
+          ) : (
+            <Field label="Instructions">
+              <Textarea
+                value={draft.instructions}
+                placeholder="Extra instructions prepended to dispatched threads"
+                onChange={(event) => set("instructions", event.target.value)}
+                className="min-h-20 text-xs"
+              />
+            </Field>
+          )}
         </div>
         {error ? (
           <p role="alert" className="text-xs text-destructive">
@@ -359,7 +389,13 @@ export function PresetDialog({
               setSubmitting(true);
               setError(null);
               onSave(draft)
-                .then(() => onOpenChange(false))
+                .then((saveError) => {
+                  if (saveError !== null) {
+                    setError(saveError);
+                    return;
+                  }
+                  onOpenChange(false);
+                })
                 .catch((saveError: unknown) =>
                   setError(describeError(saveError)),
                 )
