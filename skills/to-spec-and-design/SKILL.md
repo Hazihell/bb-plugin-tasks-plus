@@ -1,10 +1,10 @@
 ---
 name: to-spec-and-design
-description: "Turn the current conversation into a spec and a system design and publish both to the issue tracker. Use when a discussed feature is ready to write up, or when a spec needs its technical direction agreed at the same gate."
+description: "Turn the current conversation into a spec, a system design and a breakdown into tracer-bullet subtasks, and publish them to the issue tracker. Use when a discussed feature is ready to write up, when a spec needs its technical direction agreed at the same gate, or when a plan needs breaking into tickets with blocking edges."
 disable-model-invocation: true
 ---
 
-This skill takes the current conversation context and codebase understanding and produces two documents: a spec for the problem and the intended behaviour, a design for the technical direction. Do NOT interview the user; just synthesize what you already know.
+This skill takes the current conversation context and codebase understanding and produces two documents and a task graph: a spec for the problem and the intended behaviour, a design for the technical direction, and a breakdown of the work into tracer-bullet subtasks. Do NOT interview the user; just synthesize what you already know.
 
 Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill. A repo's `docs/agents/issue-tracker.md` overrides it.
 
@@ -20,23 +20,52 @@ Check with the user that these seams match their expectations.
 
 Approval agrees the intended behaviour and the technical direction; implementation stays open. Describe each part by the role it plays, and leave the classes, functions and files to the local plan each subtask writes when its work begins.
 
-4. Write the spec using the `<spec-template>` below and the design using the `<design-template>` below, then put both to the user and wait. One gate covers the pair: publish only once the user approves them together, revising and asking again after each change.
+4. Break the work into subtasks. The design's **Deliberately Undecided** section already names what each subtask must settle; this step decides where the cuts fall.
 
-5. Publish both onto the same task, separately addressable, so a later integration review can fetch the direction alone and diff the built architecture against it.
+Draft the work as **tracer bullets** — each a vertical slice, not a layer:
 
-The spec is the task description. Create the task and capture its key:
+<vertical-slice-rules>
+
+- Each slice cuts a narrow but COMPLETE path through every layer (schema, API, UI, tests): vertical, NOT a horizontal slice of one layer
+- A completed slice is demoable or verifiable on its own
+- Each slice is sized to fit in a single fresh context window
+- Any prefactoring should be done first
+
+</vertical-slice-rules>
+
+Give each slice its **blocking edges**: the other slices that must complete before it can start. A slice with no blockers can start immediately.
+
+**Wide refactors are the exception to vertical slicing.** A **wide refactor** is one mechanical change (rename a column, retype a shared symbol) whose **blast radius** fans across the whole codebase, so a single edit breaks thousands of call sites at once and no vertical slice can land green. Don't force it into a tracer bullet; sequence it as **expand–contract**. First expand: add the new form beside the old so nothing breaks. Then migrate the call sites over in batches sized by blast radius (per package, per directory), each batch its own subtask blocked by the expand, keeping CI green batch to batch because the old form still exists. Finally contract: delete the old form once no caller remains, in a subtask blocked by every migrate batch. When even the batches can't stay green alone, keep the sequence but let them share an integration branch that all block a final integrate-and-verify subtask; green is promised only there.
+
+A feature that is genuinely one slice stays one slice. Do not invent a breakdown to have one.
+
+5. Write the spec using the `<spec-template>` below, the design using the `<design-template>` below, and the breakdown as a numbered list showing, per slice, its **title**, what it **delivers** end to end, and what **blocks** it. Put all three to the user and wait.
+
+One gate covers the set: behaviour, technical direction and the shape of the task graph are approved together. Ask whether the granularity feels right, whether each blocking edge genuinely gates its slice, and whether any slices should merge or split. Publish only once the user approves them together, revising and asking again after each change.
+
+6. Publish. The spec is the parent task's description; the design attaches to that same task, separately addressable, so a later integration review can fetch the direction alone and diff the built architecture against it.
 
 ```sh
-KEY=$(bb tasks-plus create --title <title> --description-file <path> --label ready-for-agent --json | jq -r '.task.key')
+KEY=$(bb tasks-plus create --title <title> --description-file <spec-path> --json | jq -r '.task.key')
+bb tasks-plus attachment add "$KEY" --file <design-path> --name approved-plan.md
 ```
 
-The design attaches to that task as the approved plan:
+Then create one child per slice, in dependency order — blockers before dependents — writing each description from the `<slice-template>` below. Capture every key, because the edges need them:
 
 ```sh
-bb tasks-plus attachment add "$KEY" --file <path> --name approved-plan.md
+SLICE_1=$(bb tasks-plus create --title <slice-title> --description-file <slice-path> \
+  --label ready-for-agent --parent "$KEY" --json | jq -r '.task.key')
 ```
 
-No further triage is needed.
+Finally record each blocking edge as a relation:
+
+```sh
+bb tasks-plus blocker add "$SLICE_2" "$SLICE_1"   # slice 2 is blocked by slice 1
+```
+
+`ready-for-agent` marks the work an agent may pick up, so it goes on the children. The parent is the umbrella and carries no triage label; no agent should take it as a unit of work.
+
+Where the feature is one slice, there is no umbrella: publish the single task with the spec as its description, the design attached, and `ready-for-agent` on it. No further triage is needed.
 
 <spec-template>
 
@@ -120,3 +149,23 @@ How anyone tells that the built thing matches this direction: the seams agreed w
 The decisions this design leaves to the subtasks, including every choice of class, function and file, so each subtask writes its own local plan when its work begins.
 
 </design-template>
+
+<slice-template>
+
+## What to build
+
+The end-to-end behaviour this slice makes work, from the user's perspective, not
+a layer-by-layer implementation list.
+
+## Acceptance criteria
+
+- [ ] Criterion 1
+- [ ] Criterion 2
+
+</slice-template>
+
+Parent and blocked-by are relations on this tracker, not prose sections: the
+relation is the record, so they stay out of the body.
+
+Avoid specific file paths and code snippets in a slice description; they go
+stale fast. The prototype exception from the spec applies here too.
