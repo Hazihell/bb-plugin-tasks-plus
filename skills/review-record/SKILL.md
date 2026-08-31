@@ -105,18 +105,13 @@ You are the sole writer. Each agent gets exactly one axis and no task key, and
 returns a report; separate contexts are what keep one axis from polluting the
 other, and a dead axis costs nothing to clean up.
 
-**Pick the reviewer first.** Default: one message with two `Agent` tool calls,
-`general-purpose` for both.
+Whoever the environment names as reviewer runs both axes; absent any
+instruction, two `general-purpose` sub-agents. Dispatch them in one message so
+they run concurrently, titled `review/standards: <fixed-point>..HEAD` and
+`review/spec: <fixed-point>..HEAD`. When the reviewer is a bb thread, the
+**codex** skill holds the spawn mechanics.
 
-When the user asks for codex (`codex`, "with codex", "second model"), keep the
-structure identical and swap only who runs each axis. Follow the **codex** skill
-for the spawn mechanics; the shape here is two bb threads, spawned in one
-message so they run concurrently:
-
-- `--provider codex --model gpt-5.6-sol --reasoning-level high --parent-self`
-- Titles `review/standards: <fixed-point>..HEAD` and `review/spec: <fixed-point>..HEAD`
-
-Four rules belong **inside each prompt**, on both routes:
+Four rules belong **inside each prompt**:
 
 - **The agent does the review itself.** It reads the diff and writes the report
   with its own eyes, spawning nothing and delegating no further. State this
@@ -128,11 +123,8 @@ Four rules belong **inside each prompt**, on both routes:
 - **Paste the smell baseline into the Standards prompt in full.** It exists
   nowhere in the repo, so a fresh agent has no other way to reach it. Everything
   else an axis needs is a path the agent can read for itself.
-- **Same brief, same word limit.** Use the axis briefs below verbatim. A codex
-  report and a Claude report should be interchangeable in the aggregate.
-
-Name the reviewer in the final record, so a codex review is never mistaken for a
-Claude one.
+- **Same brief, same word limit.** Use the axis briefs below verbatim, so two
+  reports are interchangeable in the aggregate whoever wrote them.
 
 **Standards prompt** should include:
 
