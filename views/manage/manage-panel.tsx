@@ -285,8 +285,9 @@ function PresetsSection() {
   const [error, setError] = useState<string | null>(null);
 
   const save = async (editing: Preset | null, draft: PresetDraft) => {
-    await savePresetDraft(rpc, editing, draft);
-    presets.refresh();
+    const error = await savePresetDraft(rpc, editing, draft);
+    if (error === null) presets.refresh();
+    return error;
   };
 
   return (
@@ -392,7 +393,13 @@ function PresetsSection() {
                             setError(null);
                             rpc
                               .call("deletePreset", { presetId: preset.id })
-                              .then(() => presets.refresh())
+                              .then((result) => {
+                                if ("ok" in result) {
+                                  setError(result.error.message);
+                                  return;
+                                }
+                                presets.refresh();
+                              })
                               .catch((deleteError: unknown) =>
                                 setError(describeError(deleteError)),
                               );

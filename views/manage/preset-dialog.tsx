@@ -128,7 +128,7 @@ export async function savePresetDraft(
   rpc: TasksRpc,
   editing: Preset | null,
   draft: PresetDraft,
-): Promise<void> {
+): Promise<string | null> {
   // The contract rejects a branch/machine on project-default presets, and a
   // kind switch must not leave stale targets behind — always send explicit
   // nulls outside new-worktree.
@@ -148,10 +148,15 @@ export async function savePresetDraft(
     instructions: draft.instructions,
   };
   if (editing) {
-    await rpc.call("updatePreset", { presetId: editing.id, ...fields });
+    const result = await rpc.call("updatePreset", {
+      presetId: editing.id,
+      ...fields,
+    });
+    if ("ok" in result) return result.error.message;
   } else {
     await rpc.call("createPreset", fields);
   }
+  return null;
 }
 
 export function PresetDialog({
@@ -164,7 +169,7 @@ export function PresetDialog({
   onOpenChange: (open: boolean) => void;
   /** Preset being edited, or null to create. */
   editing: Preset | null;
-  onSave: (draft: PresetDraft) => Promise<void>;
+  onSave: (draft: PresetDraft) => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState<PresetDraft>(
     editing ? presetDraft(editing) : EMPTY_PRESET_DRAFT,
@@ -364,7 +369,13 @@ export function PresetDialog({
               setSubmitting(true);
               setError(null);
               onSave(draft)
-                .then(() => onOpenChange(false))
+                .then((saveError) => {
+                  if (saveError !== null) {
+                    setError(saveError);
+                    return;
+                  }
+                  onOpenChange(false);
+                })
                 .catch((saveError: unknown) =>
                   setError(describeError(saveError)),
                 )

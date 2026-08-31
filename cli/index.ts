@@ -2294,6 +2294,7 @@ async function runPreset(domain: TasksDomain, argv: string[]): Promise<string> {
       }
       throw error;
     }
+    if ("ok" in result) throw new CliError(result.error.message);
     return args.flags.has("json")
       ? JSON.stringify(result)
       : `Updated preset ${result.preset.name}  ${result.preset.id}`;
@@ -2322,6 +2323,7 @@ async function runPreset(domain: TasksDomain, argv: string[]): Promise<string> {
       }
       throw error;
     }
+    if ("ok" in result) throw new CliError(result.error.message);
     return args.flags.has("json")
       ? JSON.stringify({ ...result, preset })
       : `Deleted preset ${preset.name}`;

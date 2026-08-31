@@ -468,6 +468,7 @@ const tasksDomainErrorSchema = z
       "project_prefix_conflict",
       "attachment_referenced",
       "artifact_attachment_mismatch",
+      "preset_builtin",
     ]),
     message: z.string(),
   })
@@ -519,6 +520,16 @@ const attachmentDeleteResultSchema = z.union([
       attachment: z.null(),
     })
     .strict(),
+  z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
+]);
+
+const presetUpdateResultSchema = z.union([
+  z.object({ preset: presetSchema }).strict(),
+  z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
+]);
+
+const presetDeleteResultSchema = z.union([
+  z.object({ deleted: z.boolean() }).strict(),
   z.object({ ok: z.literal(false), error: tasksDomainErrorSchema }).strict(),
 ]);
 
@@ -951,11 +962,11 @@ export const tasksRpcContract = defineRpcContract({
   },
   updatePreset: {
     input: updatePresetInputSchema,
-    output: z.object({ preset: presetSchema }).strict(),
+    output: presetUpdateResultSchema,
   },
   deletePreset: {
     input: z.object({ presetId: idSchema }).strict(),
-    output: z.object({ deleted: z.boolean() }).strict(),
+    output: presetDeleteResultSchema,
   },
   listPresets: {
     input: z.null(),

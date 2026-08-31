@@ -1102,21 +1102,31 @@ describe("Tasks RPC domain API", () => {
     if (!preset) throw new Error("expected seeded implement preset");
     const signalsBeforeRefusal = harness.realtimeSignals.length;
 
-    const updateAttempt = harness.callRpc("updatePreset", {
-      presetId: preset.id,
-      instructions: "changed",
+    const updateAttempt = tasksRpcContract.updatePreset.output.parse(
+      await harness.callRpc("updatePreset", {
+        presetId: preset.id,
+        instructions: "changed",
+      }),
+    );
+    expect(updateAttempt).toEqual({
+      ok: false,
+      error: {
+        code: "preset_builtin",
+        message:
+          'Preset "implement" ships with the plugin and cannot be edited.',
+      },
     });
-    await expect(updateAttempt).rejects.toMatchObject({
-      code: "handler_error",
+    const deleteAttempt = tasksRpcContract.deletePreset.output.parse(
+      await harness.callRpc("deletePreset", { presetId: preset.id }),
+    );
+    expect(deleteAttempt).toEqual({
+      ok: false,
+      error: {
+        code: "preset_builtin",
+        message:
+          'Preset "implement" ships with the plugin and cannot be deleted.',
+      },
     });
-    await expect(updateAttempt).rejects.toThrow(/ships with the plugin/);
-    const deleteAttempt = harness.callRpc("deletePreset", {
-      presetId: preset.id,
-    });
-    await expect(deleteAttempt).rejects.toMatchObject({
-      code: "handler_error",
-    });
-    await expect(deleteAttempt).rejects.toThrow(/ships with the plugin/);
     expect(harness.realtimeSignals).toHaveLength(signalsBeforeRefusal);
     expect(store.tasks.getPreset(preset.id)).toMatchObject({
       name: "implement",

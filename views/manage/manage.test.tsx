@@ -766,6 +766,48 @@ describe("PresetDialog environment section", () => {
     ).toBeDefined();
   });
 
+  it("shows a typed update refusal in the preset dialog", async () => {
+    const message =
+      'Preset "implement" ships with the plugin and cannot be edited.';
+    const slot = renderManagePresets([presetRow()], {
+      updatePreset: () => ({
+        ok: false,
+        error: { code: "preset_builtin", message },
+      }),
+    });
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Presets" }));
+    fireEvent.click(
+      await slot.findByRole("button", {
+        name: "Edit preset FB3 BE live worktree",
+      }),
+    );
+    fireEvent.click(slot.getByRole("button", { name: "Save preset" }));
+
+    const alert = await slot.findByRole("alert");
+    expect(alert.textContent).toBe(message);
+    expect(slot.getByRole("button", { name: "Save preset" })).toBeDefined();
+  });
+
+  it("shows a typed delete refusal in the preset table", async () => {
+    const message =
+      'Preset "implement" ships with the plugin and cannot be deleted.';
+    const slot = renderManagePresets([presetRow()], {
+      deletePreset: () => ({
+        ok: false,
+        error: { code: "preset_builtin", message },
+      }),
+    });
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Presets" }));
+    fireEvent.click(
+      await slot.findByRole("button", {
+        name: "Delete preset FB3 BE live worktree",
+      }),
+    );
+
+    const alert = await slot.findByRole("alert");
+    expect(alert.textContent).toBe(message);
+  });
+
   it("saves the host picker's provider, model, reasoning, and tier together", async () => {
     const updates: Array<Record<string, unknown>> = [];
     const slot = renderManagePresets([presetRow()], {
