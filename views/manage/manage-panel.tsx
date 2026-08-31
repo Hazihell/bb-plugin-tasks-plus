@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Folder, Label, Preset } from "../../shared/contract.js";
+import type { Folder, Label, Preset, Project } from "../../shared/contract.js";
 import {
   listAllTasks,
   useFolders,
@@ -31,6 +31,12 @@ import {
   type PresetDraft,
 } from "./preset-dialog.js";
 import { ColorSwatchPicker, DEFAULT_COLOR } from "./shared.js";
+import {
+  folderPathName,
+  ProjectDialog,
+  saveProjectDraft,
+  type ProjectDraft,
+} from "./project-dialog.js";
 
 // ---------------------------------------------------------------------------
 // Labels
@@ -262,6 +268,141 @@ function LabelsSection() {
           }
         }}
       />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Projects
+// ---------------------------------------------------------------------------
+
+function ProjectsSection() {
+  const rpc = useTasksRpc();
+  const projects = useProjects();
+  const folders = useFolders();
+  const bbProjects = useTasksQuery(
+    async (rpc) => (await rpc.call("listBbProjects")).bbProjects,
+    ["projects:changed"],
+  );
+  // Keyed remount resets the dialog draft per open/target.
+  const [dialog, setDialog] = useState<{
+    key: number;
+    project: Project;
+  } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const projectList = projects.data ?? [];
+  const folderList = folders.data ?? [];
+  const bbProjectList = bbProjects.data ?? [];
+
+  const save = async (project: Project, draft: ProjectDraft) => {
+    try {
+      await saveProjectDraft(rpc, project, draft);
+      projects.refresh();
+      return null;
+    } catch (saveError) {
+      return describeError(saveError);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Settings every task in a project inherits — where its worktrees branch
+        from, and which bb project its agents run in.
+      </p>
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full text-left text-sm">
+          <thead>
+            <tr className="border-b border-border-hairline text-xs text-muted-foreground">
+              <th className="px-3 py-2 font-medium">Name</th>
+              <th className="px-3 py-2 font-medium">Prefix</th>
+              <th className="px-3 py-2 font-medium">Folder</th>
+              <th className="px-3 py-2 font-medium">Base branch</th>
+              <th className="px-3 py-2 font-medium">Dispatch target</th>
+              <th className="px-3 py-2" />
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-hairline">
+            {projectList.map((project) => (
+              <tr key={project.id} className="group">
+                <td className="px-3 py-2">
+                  <span className="flex items-center gap-2">
+                    <span
+                      aria-hidden
+                      className="size-2.5 shrink-0 rounded-sm"
+                      style={{ backgroundColor: project.color }}
+                    />
+                    {project.name}
+                  </span>
+                </td>
+                <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                  {project.prefix}
+                </td>
+                <td className="px-3 py-2 text-muted-foreground">
+                  {project.folderId
+                    ? folderPathName(folderList, project.folderId)
+                    : "—"}
+                </td>
+                <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                  {project.baseBranch ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-muted-foreground">
+                  {project.linkedBbProjectId === null
+                    ? "Not linked"
+                    : (bbProjectList.find(
+                        (candidate) =>
+                          candidate.id === project.linkedBbProjectId,
+                      )?.name ?? project.linkedBbProjectId)}
+                </td>
+                <td className="px-3 py-2">
+                  <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-6 text-muted-foreground"
+                      aria-label={`Edit project ${project.name}`}
+                      onClick={() => {
+                        setError(null);
+                        setDialog({ key: Date.now(), project });
+                      }}
+                    >
+                      <Icon name="Edit" className="size-3.5" />
+                    </Button>
+                  </span>
+                </td>
+              </tr>
+            ))}
+            {projectList.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={6}
+                  className="px-3 py-3 text-sm text-muted-foreground"
+                >
+                  No projects yet.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {dialog ? (
+        <ProjectDialog
+          key={dialog.key}
+          open
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
+          project={dialog.project}
+          folders={folderList}
+          bbProjects={bbProjectList}
+          onSave={(draft) => save(dialog.project, draft)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -697,11 +838,12 @@ function FoldersSection() {
 // ---------------------------------------------------------------------------
 
 /**
- * Settings-ish management surface: labels, agent presets, and folders.
+ * Settings surface behind the shell's `manage` route: projects, labels,
+ * agent presets, and folders.
  *
- * The shell does not yet reserve a manage route or sidebar-footer slot, so
- * this is exported unmounted; when the shell grows one (e.g. a `manage`
- * subPath or a sidebar "Manage" button), render <ManagePanel /> there.
+ * Project-wide settings live here rather than in the task detail rail — the
+ * rail reads a project's base branch at dispatch time, this is where it is
+ * set.
  */
 export function ManagePanel({ className }: { className?: string }) {
   return (
@@ -714,15 +856,19 @@ export function ManagePanel({ className }: { className?: string }) {
       <header className="space-y-1">
         <h2 className="text-base font-semibold">Manage</h2>
         <p className="text-sm text-muted-foreground">
-          Labels, agent presets, and folders.
+          Projects, labels, agent presets, and folders.
         </p>
       </header>
-      <Tabs defaultValue="labels">
+      <Tabs defaultValue="projects">
         <TabsList>
+          <TabsTrigger value="projects">Projects</TabsTrigger>
           <TabsTrigger value="labels">Labels</TabsTrigger>
           <TabsTrigger value="presets">Presets</TabsTrigger>
           <TabsTrigger value="folders">Folders</TabsTrigger>
         </TabsList>
+        <TabsContent value="projects" className="pt-3">
+          <ProjectsSection />
+        </TabsContent>
         <TabsContent value="labels" className="pt-3">
           <LabelsSection />
         </TabsContent>

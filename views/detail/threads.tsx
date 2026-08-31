@@ -21,6 +21,11 @@ import { PresetDialog, savePresetDraft } from "../manage/preset-dialog.js";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 import { useTasksRpc } from "../../shell/data.js";
 import { dispatchUnavailableReason } from "../list/lib.js";
+import {
+  defaultDispatchPreset,
+  rememberPresetId,
+  useLastPresetId,
+} from "./last-preset.js";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -136,24 +141,6 @@ function ThreadCard({
   );
 }
 
-const LAST_PRESET_STORAGE_KEY = "bb-tasks:last-dispatch-preset";
-
-function loadLastPresetId(): string | null {
-  try {
-    return window.localStorage.getItem(LAST_PRESET_STORAGE_KEY);
-  } catch {
-    return null;
-  }
-}
-
-function storeLastPresetId(presetId: string): void {
-  try {
-    window.localStorage.setItem(LAST_PRESET_STORAGE_KEY, presetId);
-  } catch {
-    // Persistence is best-effort (e.g. sandboxed iframes without storage).
-  }
-}
-
 interface DispatchControlProps {
   task: Task;
   presets: Preset[] | undefined;
@@ -187,7 +174,7 @@ export function DispatchControl({
   const rpc = useRpc<DelegationRpcContract>();
   const tasksRpc = useTasksRpc();
   const [dispatching, setDispatching] = useState(false);
-  const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
+  const lastPresetId = useLastPresetId();
   // Keyed remount resets the create dialog's draft per open.
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
 
@@ -205,8 +192,7 @@ export function DispatchControl({
   };
 
   const pickPreset = (preset: Preset) => {
-    setLastPresetId(preset.id);
-    storeLastPresetId(preset.id);
+    rememberPresetId(preset.id);
     void dispatch(preset.id);
   };
 
@@ -242,14 +228,7 @@ export function DispatchControl({
     );
   }
 
-  // Nothing remembered yet lands on the preset that ships with the plugin —
-  // the one every install has — before falling back to alphabetical order.
-  const current =
-    presets?.find((preset) => preset.id === lastPresetId) ??
-    presets?.find((preset) => preset.builtin) ??
-    (presets
-      ? [...presets].sort((a, b) => a.name.localeCompare(b.name))[0]
-      : undefined);
+  const current = defaultDispatchPreset(presets, lastPresetId);
 
   return (
     <>

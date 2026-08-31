@@ -41,6 +41,7 @@ import {
   resolveBbProjectLink,
   type BbProjectLinkState,
 } from "./bb-project-link.js";
+import { folderPathName } from "./project-dialog.js";
 
 const NO_FOLDER = "__none__";
 const NEW_FOLDER = "__new__";
@@ -66,6 +67,8 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
   const [linkState, setLinkState] = useState<BbProjectLinkState>(
     emptyBbProjectLinkState,
   );
+  // Empty means "no project branch": tasks fall through to the preset.
+  const [baseBranch, setBaseBranch] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -86,6 +89,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     setNewFolderMode(false);
     setNewFolderName("");
     setLinkState(emptyBbProjectLinkState());
+    setBaseBranch("");
     setError(null);
   }, [open]);
 
@@ -109,14 +113,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
     !submitting;
 
   const folderList = folders.data ?? [];
-  const folderName = (id: string) => {
-    const folder = folderList.find((entry) => entry.id === id);
-    if (!folder) return "Folder";
-    const parent = folder.parentFolderId
-      ? folderList.find((entry) => entry.id === folder.parentFolderId)
-      : null;
-    return parent ? `${parent.name} / ${folder.name}` : folder.name;
-  };
+  const folderName = (id: string) => folderPathName(folderList, id);
 
   const createFolderInline = async () => {
     const trimmed = newFolderName.trim();
@@ -150,6 +147,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         color,
         folderId,
         linkedBbProjectId: linkedTrimmed === "" ? null : linkedTrimmed,
+        baseBranch: baseBranch.trim() === "" ? null : baseBranch.trim(),
       });
       onOpenChange(false);
       // No explicit view: the shell opens the view this client last used.
@@ -284,6 +282,18 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
               state={linkState}
               onStateChange={setLinkState}
               bbProjects={bbProjectList}
+            />
+          </Field>
+          <Field
+            label="Base branch"
+            hint="Tasks without their own branch start here. Leave empty to fall through to the preset."
+          >
+            <Input
+              value={baseBranch}
+              placeholder="preset default — leave empty"
+              aria-label="Project base branch"
+              onChange={(event) => setBaseBranch(event.target.value)}
+              className="h-8"
             />
           </Field>
         </div>

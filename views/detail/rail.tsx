@@ -27,6 +27,12 @@ import {
   statusUnavailableReason,
 } from "../list/lib.js";
 import { DispatchControl } from "./threads.js";
+import { defaultDispatchPreset, useLastPresetId } from "./last-preset.js";
+import {
+  describeBaseBranchOrigin,
+  readBaseBranch,
+  type BaseBranchReadout,
+} from "./base-branch-source.js";
 import { DEFAULT_COLOR } from "../manage/shared.js";
 import {
   BbProjectLinkPicker,
@@ -353,6 +359,10 @@ function LabelsMenu({
  * to link one) and opens a picker that saves via updateProject. The rail's
  * project data is subscribed to projects:changed, so the row refreshes as
  * soon as the save publishes.
+ *
+ * The link is the only project-wide setting the rail writes; everything else
+ * about a project — including its base branch — is configured in the manage
+ * panel's Projects tab.
  */
 function DispatchTargetMenu({
   project,
@@ -371,8 +381,6 @@ function DispatchTargetMenu({
     emptyBbProjectLinkState,
   );
   const [saving, setSaving] = useState(false);
-  // Empty means "no project branch": tasks in it fall through to the preset.
-  const [branch, setBranch] = useState("");
   const linkedBbProjectId = project.linkedBbProjectId;
   const linkedName = bbProjects.find(
     (candidate) => candidate.id === linkedBbProjectId,
@@ -383,11 +391,9 @@ function DispatchTargetMenu({
     if (saving) return;
     setSaving(true);
     try {
-      const trimmed = branch.trim();
       await rpc.call("updateProject", {
         projectId: project.id,
         linkedBbProjectId: linkedId,
-        baseBranch: trimmed === "" ? null : trimmed,
       });
       setOpen(false);
     } catch (saveError) {
@@ -403,10 +409,7 @@ function DispatchTargetMenu({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) {
-          setState(bbProjectLinkStateFor(linkedBbProjectId));
-          setBranch(project.baseBranch ?? "");
-        }
+        if (next) setState(bbProjectLinkStateFor(linkedBbProjectId));
         setOpen(next);
       }}
     >
@@ -435,18 +438,6 @@ function DispatchTargetMenu({
           bbProjects={bbProjects}
           noneLabel={linkedBbProjectId !== null ? "Unlink" : "Not linked"}
         />
-        <div className="mt-2.5">
-          <div className="mb-1 text-2xs font-semibold text-muted-foreground">
-            Base branch
-          </div>
-          <Input
-            value={branch}
-            placeholder="preset default — leave empty"
-            aria-label="Project base branch"
-            onChange={(event) => setBranch(event.target.value)}
-            className="h-8"
-          />
-        </div>
         <div className="mt-2.5 flex items-center justify-between gap-2">
           {linkedBbProjectId !== null ? (
             <Button
@@ -477,23 +468,30 @@ function DispatchTargetMenu({
 }
 
 /**
- * Editable "Base branch" row for the task itself. Empty means the task
- * inherits: its parent task, then its project, then the preset decide.
+ * The rail's base-branch row. It reads the branch a dispatch would actually
+ * use and names the scope it came from; the only thing it writes is the
+ * task's own branch. Wider scopes are configured where they live — the
+ * project in the manage panel, the preset in its dialog.
  */
 function BaseBranchMenu({
   task,
-  project,
+  readout,
+  inherited,
+  presetName,
   onUpdate,
   triggerClassName,
 }: {
   task: Task;
-  project: Project | undefined;
+  readout: BaseBranchReadout;
+  /** What the task would fall back to if it named no branch of its own. */
+  inherited: BaseBranchReadout;
+  presetName: string | undefined;
   onUpdate: (update: TaskPropertyUpdate) => void;
   triggerClassName: string;
 }) {
   const [open, setOpen] = useState(false);
   const [branch, setBranch] = useState("");
-  const inherited = project?.baseBranch ?? null;
+  const attribution = describeBaseBranchOrigin(readout, presetName);
   const save = (next: string | null) => {
     onUpdate({ baseBranch: next });
     setOpen(false);
@@ -513,11 +511,24 @@ function BaseBranchMenu({
           className={triggerClassName}
         >
           <Icon name="GitBranch" className="size-3.5 shrink-0" />
-          {task.baseBranch !== null ? (
-            <span className="truncate">{task.baseBranch}</span>
+          {readout.branch === null ? (
+            <span className="truncate text-muted-foreground">bb default</span>
           ) : (
-            <span className="truncate text-muted-foreground">
-              {inherited === null ? "Inherited" : `Inherited · ${inherited}`}
+            <span
+              className={cn(
+                "min-w-0 truncate",
+                readout.origin === "task" ? undefined : "text-muted-foreground",
+              )}
+              title={
+                attribution === null
+                  ? readout.branch
+                  : `${readout.branch} · ${attribution}`
+              }
+            >
+              {readout.branch}
+              {attribution === null ? null : (
+                <span className="text-2xs"> · {attribution}</span>
+              )}
             </span>
           )}
         </button>
@@ -538,6 +549,11 @@ function BaseBranchMenu({
           }}
           className="h-8"
         />
+        <p className="mt-1.5 text-2xs text-muted-foreground">
+          {inherited.branch === null
+            ? "Inheriting lands on bb's default branch."
+            : `Inheriting lands on ${inherited.branch} — ${describeBaseBranchOrigin(inherited, presetName)}.`}
+        </p>
         <div className="mt-2.5 flex items-center justify-between gap-2">
           {task.baseBranch !== null ? (
             <Button
@@ -593,6 +609,42 @@ export function PropertiesRail({
     async (query) => (await query.call("listBbProjects")).bbProjects,
     ["projects:changed"],
   );
+  // The base-branch read-out has to name the ancestor that supplied a branch,
+  // so it walks the chain the dispatch resolver walks. The walk stops on a
+  // repeated id, matching the resolver's tolerance of a cyclic parent link.
+  const ancestors = useTasksQuery(
+    async (query) => {
+      const chain: { key: string; baseBranch: string | null }[] = [];
+      const seen = new Set<string>([task.id]);
+      let nextId = task.parentTaskId;
+      while (nextId !== null && !seen.has(nextId)) {
+        seen.add(nextId);
+        const { task: ancestor } = await query.call("getTask", {
+          taskId: nextId,
+        });
+        if (ancestor === null) break;
+        chain.push({ key: ancestor.key, baseBranch: ancestor.baseBranch });
+        nextId = ancestor.parentTaskId;
+      }
+      return chain;
+    },
+    ["tasks:changed"],
+    [task.id, task.parentTaskId],
+  );
+  // Which preset supplies the fallback depends on which one a dispatch would
+  // use, so the read-out reads the same remembered choice the button does.
+  const lastPresetId = useLastPresetId();
+  const dispatchPreset = defaultDispatchPreset(presets, lastPresetId);
+  const scopes = {
+    ancestors: ancestors.data ?? [],
+    project,
+    preset: dispatchPreset,
+  };
+  const baseBranch = readBaseBranch({ ...scopes, task });
+  const inheritedBaseBranch = readBaseBranch({
+    ...scopes,
+    task: { baseBranch: null },
+  });
   return (
     <aside className={cn("w-56 shrink-0 py-10 pl-2 pr-6", className)}>
       <h2 className="mb-1.5 text-xs font-semibold text-muted-foreground">
@@ -655,7 +707,9 @@ export function PropertiesRail({
       </div>
       <BaseBranchMenu
         task={task}
-        project={project}
+        readout={baseBranch}
+        inherited={inheritedBaseBranch}
+        presetName={dispatchPreset?.name}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}
       />

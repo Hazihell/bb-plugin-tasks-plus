@@ -52,6 +52,7 @@ const project = {
   color: "blue",
   folderId: null,
   linkedBbProjectId: null,
+  baseBranch: null,
   createdAt: "2026-07-15T00:00:00.000Z",
 };
 
@@ -1125,6 +1126,83 @@ describe("Manage folders", () => {
   });
 });
 
+describe("Manage projects", () => {
+  function renderProjects(
+    projectRow: Record<string, unknown>,
+    overrides: Record<string, unknown> = {},
+  ) {
+    return renderSlot(
+      app.navPanels[0]!,
+      { subPath: "manage" },
+      {
+        rpc: {
+          listProjects: () => ({ projects: [projectRow] }),
+          listFolders: () => ({ folders: [] }),
+          listPresets: () => ({ presets: [] }),
+          sidebarSummary: () => ({ projects: [] }),
+          listTasks: () => ({ tasks: [] }),
+          listLabels: () => ({ labels: [] }),
+          listBbProjects: () => ({ bbProjects: [] }),
+          ...overrides,
+        },
+      },
+    );
+  }
+
+  it("sets a project's base branch", async () => {
+    const updateCalls: Array<Record<string, unknown>> = [];
+    const slot = renderProjects(project, {
+      updateProject: (input: Record<string, unknown>) => {
+        updateCalls.push(input);
+        return { project: { ...project, ...input } };
+      },
+    });
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Projects" }));
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit project Tasks Plugin" }),
+    );
+    fireEvent.change(await slot.findByLabelText("Project base branch"), {
+      target: { value: " release-redesign " },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Save project" }));
+
+    await waitFor(() => expect(updateCalls).toHaveLength(1));
+    expect(updateCalls[0]).toEqual({
+      projectId: PROJECT_ID,
+      name: "Tasks Plugin",
+      color: "blue",
+      folderId: null,
+      linkedBbProjectId: null,
+      baseBranch: "release-redesign",
+    });
+  });
+
+  it("clears a project's base branch back to a single null", async () => {
+    const updateCalls: Array<Record<string, unknown>> = [];
+    const branched = { ...project, baseBranch: "release-redesign" };
+    const slot = renderProjects(branched, {
+      updateProject: (input: Record<string, unknown>) => {
+        updateCalls.push(input);
+        return { project: { ...branched, ...input } };
+      },
+    });
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Projects" }));
+    // The table shows the branch before anything is opened.
+    await slot.findByText("release-redesign");
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit project Tasks Plugin" }),
+    );
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Clear base branch" }),
+    );
+    fireEvent.click(slot.getByRole("button", { name: "Save project" }));
+
+    await waitFor(() => expect(updateCalls).toHaveLength(1));
+    // "No branch" has one spelling; a blank draft is never sent as "".
+    expect(updateCalls[0]).toMatchObject({ baseBranch: null });
+  });
+});
+
 describe("NewProjectDialog", () => {
   function renderEmptyState(overrides: Record<string, unknown> = {}) {
     return renderSlot(
@@ -1165,6 +1243,7 @@ describe("NewProjectDialog", () => {
       prefix: "HL",
       folderId: null,
       linkedBbProjectId: null,
+      baseBranch: null,
     });
     await waitFor(() =>
       expect(slot.navigateCalls).toContainEqual({
@@ -1173,6 +1252,26 @@ describe("NewProjectDialog", () => {
         options: { subPath: PROJECT_ID },
       }),
     );
+  });
+
+  it("creates a project with a base branch", async () => {
+    const createCalls: Array<Record<string, unknown>> = [];
+    const slot = renderEmptyState({
+      createProject: (input: Record<string, unknown>) => {
+        createCalls.push(input);
+        return { project: { ...project, ...input, id: PROJECT_ID } };
+      },
+    });
+    fireEvent.click(await slot.findByRole("button", { name: /New project/ }));
+    fireEvent.change(await slot.findByPlaceholderText("e.g. Tasks Plugin"), {
+      target: { value: "Home Lab" },
+    });
+    fireEvent.change(slot.getByLabelText("Project base branch"), {
+      target: { value: "  release-redesign  " },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Create project" }));
+    await waitFor(() => expect(createCalls).toHaveLength(1));
+    expect(createCalls[0]).toMatchObject({ baseBranch: "release-redesign" });
   });
 
   it("flags malformed prefixes before submit", async () => {
