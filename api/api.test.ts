@@ -1092,7 +1092,7 @@ describe("Tasks RPC domain API", () => {
     await harness.dispose();
   });
 
-  it("refuses builtin preset mutations while allowing custom preset mutations", async () => {
+  it("allows builtin execution changes while refusing contract mutations", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     const store = createStore(bb);
     registerTasksApi(bb, store);
@@ -1100,20 +1100,52 @@ describe("Tasks RPC domain API", () => {
       .listPresets()
       .find((candidate) => candidate.name === "implement");
     if (!preset) throw new Error("expected seeded implement preset");
+
+    const executionUpdate = tasksRpcContract.updatePreset.output.parse(
+      await harness.callRpc("updatePreset", {
+        presetId: preset.id,
+        modelId: "user-selected-model",
+        name: preset.name,
+        instructions: preset.instructions,
+      }),
+    );
+    expect(executionUpdate).toEqual({
+      preset: expect.objectContaining({
+        id: preset.id,
+        name: "implement",
+        modelId: "user-selected-model",
+        instructions: preset.instructions,
+        builtin: true,
+      }),
+    });
     const signalsBeforeRefusal = harness.realtimeSignals.length;
 
-    const updateAttempt = tasksRpcContract.updatePreset.output.parse(
+    const instructionsAttempt = tasksRpcContract.updatePreset.output.parse(
       await harness.callRpc("updatePreset", {
         presetId: preset.id,
         instructions: "changed",
       }),
     );
-    expect(updateAttempt).toEqual({
+    expect(instructionsAttempt).toEqual({
       ok: false,
       error: {
         code: "preset_builtin",
         message:
-          'Preset "implement" ships with the plugin and cannot be edited.',
+          'Preset "implement" cannot be edited; its contract text ships with the plugin.',
+      },
+    });
+    const nameAttempt = tasksRpcContract.updatePreset.output.parse(
+      await harness.callRpc("updatePreset", {
+        presetId: preset.id,
+        name: "User preset",
+      }),
+    );
+    expect(nameAttempt).toEqual({
+      ok: false,
+      error: {
+        code: "preset_builtin",
+        message:
+          'Preset "implement" cannot be edited; its contract text ships with the plugin.',
       },
     });
     const deleteAttempt = tasksRpcContract.deletePreset.output.parse(
@@ -1124,7 +1156,7 @@ describe("Tasks RPC domain API", () => {
       error: {
         code: "preset_builtin",
         message:
-          'Preset "implement" ships with the plugin and cannot be deleted.',
+          'Preset "implement" cannot be deleted; its contract text ships with the plugin.',
       },
     });
     expect(harness.realtimeSignals).toHaveLength(signalsBeforeRefusal);

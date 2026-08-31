@@ -50,7 +50,9 @@ what would unblock it.
 
 export class BuiltinPresetError extends Error {
   constructor(name: string, action: "edited" | "deleted") {
-    super(`Preset "${name}" ships with the plugin and cannot be ${action}.`);
+    super(
+      `Preset "${name}" cannot be ${action}; its contract text ships with the plugin.`,
+    );
     this.name = "BuiltinPresetError";
   }
 }
@@ -82,6 +84,8 @@ type PresetSeedValues = [
   number,
 ];
 
+type PresetContractValues = [string, string, number];
+
 function seedValues(preset: (typeof BUILTIN_PRESETS)[number]): PresetSeedValues {
   return [
     preset.name,
@@ -96,6 +100,12 @@ function seedValues(preset: (typeof BUILTIN_PRESETS)[number]): PresetSeedValues 
     preset.instructions,
     1,
   ];
+}
+
+function contractValues(
+  preset: (typeof BUILTIN_PRESETS)[number],
+): PresetContractValues {
+  return [preset.name, preset.instructions, 1];
 }
 
 export function seedBuiltinPresets(db: PluginDatabase): void {
@@ -113,12 +123,10 @@ export function seedBuiltinPresets(db: PluginDatabase): void {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
   );
-  const refreshPreset = db.prepare<[...PresetSeedValues, string]>(
+  const refreshPreset = db.prepare<[...PresetContractValues, string]>(
     `
       UPDATE presets SET
-        name = ?, provider_id = ?, model_id = ?, reasoning_level = ?,
-        service_tier = ?, permission_mode = ?, environment_kind = ?,
-        base_branch = ?, machine_id = ?, instructions = ?, builtin = ?
+        name = ?, instructions = ?, builtin = ?
       WHERE id = ?
     `,
   );
@@ -126,11 +134,14 @@ export function seedBuiltinPresets(db: PluginDatabase): void {
   db.transaction(() => {
     for (const preset of BUILTIN_PRESETS) {
       const existing = findPreset.get(preset.name);
-      const values = seedValues(preset);
       if (existing) {
-        refreshPreset.run(...values, existing.id);
+        refreshPreset.run(...contractValues(preset), existing.id);
       } else {
-        insertPreset.run(createUlid(), ...values, new Date().toISOString());
+        insertPreset.run(
+          createUlid(),
+          ...seedValues(preset),
+          new Date().toISOString(),
+        );
       }
     }
   })();

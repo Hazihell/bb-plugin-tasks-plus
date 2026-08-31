@@ -1200,14 +1200,33 @@ describe("bb tasks-plus CLI", () => {
       builtin: true,
     });
 
+    const builtinUpdated = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "preset",
+          "update",
+          "IMPLEMENT",
+          "--model",
+          "user-selected-model",
+          "--json",
+        ]),
+      ),
+    ).preset;
+    expect(builtinUpdated).toMatchObject({
+      name: "implement",
+      modelId: "user-selected-model",
+      builtin: true,
+    });
+
     for (const args of [
       ["preset", "update", "IMPLEMENT", "--instructions", "changed"],
+      ["preset", "update", "IMPLEMENT", "--name", "User preset"],
       ["preset", "delete", "IMPLEMENT"],
     ]) {
       await expect(harness.runCli(args)).resolves.toMatchObject({
         exitCode: 1,
         stdout: "",
-        stderr: expect.stringContaining("ships with the plugin"),
+        stderr: expect.stringContaining("contract text ships with the plugin"),
       });
     }
 

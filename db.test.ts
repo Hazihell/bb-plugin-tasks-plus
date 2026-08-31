@@ -86,6 +86,13 @@ describe("tasks storage", () => {
       expect(seeded?.instructions).toContain("You are the working thread");
       if (!seeded) throw new Error("expected seeded implement preset");
 
+      store.updatePreset(seeded.id, { modelId: "user-selected-model" });
+      expect(createTasksStore(db).getPreset(seeded.id)).toMatchObject({
+        modelId: "user-selected-model",
+        instructions: seeded.instructions,
+        builtin: true,
+      });
+
       db.prepare(
         `
           UPDATE presets
@@ -102,14 +109,14 @@ describe("tasks storage", () => {
       expect(refreshed).toMatchObject({
         id: seeded.id,
         name: "implement",
-        providerId: "claude-code",
-        modelId: "claude-opus-5[1m]",
-        reasoningLevel: "medium",
-        serviceTier: null,
-        permissionMode: "full",
-        environmentKind: "new-worktree",
-        baseBranch: null,
-        machineId: null,
+        providerId: "codex",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
+        serviceTier: "fast",
+        permissionMode: "auto",
+        environmentKind: "project-default",
+        baseBranch: "main",
+        machineId: "host_machine",
         instructions: seeded.instructions,
         builtin: true,
       });
@@ -138,12 +145,12 @@ describe("tasks storage", () => {
       expect(adopted).toMatchObject({
         id: userPreset.id,
         name: "implement",
-        providerId: "claude-code",
-        modelId: "claude-opus-5[1m]",
-        reasoningLevel: "medium",
+        providerId: "codex",
+        modelId: "gpt-5",
+        reasoningLevel: "high",
         serviceTier: null,
-        permissionMode: "full",
-        environmentKind: "new-worktree",
+        permissionMode: "accept-edits",
+        environmentKind: "project-default",
         baseBranch: null,
         machineId: null,
         instructions: seeded.instructions,
@@ -870,7 +877,7 @@ describe("tasks storage", () => {
     }
   });
 
-  it("protects builtin presets while allowing custom presets to change", async () => {
+  it("protects builtin contract fields while allowing execution and custom fields to change", async () => {
     const { harness, store } = setup();
     try {
       const builtin = store
@@ -878,14 +885,30 @@ describe("tasks storage", () => {
         .find((preset) => preset.name === "implement");
       if (!builtin) throw new Error("expected seeded implement preset");
 
+      expect(
+        store.updatePreset(builtin.id, {
+          modelId: "user-selected-model",
+          name: builtin.name,
+          instructions: builtin.instructions,
+        }),
+      ).toMatchObject({
+        modelId: "user-selected-model",
+        name: "implement",
+        instructions: builtin.instructions,
+        builtin: true,
+      });
       expect(() =>
         store.updatePreset(builtin.id, { instructions: "changed" }),
-      ).toThrow(/ships with the plugin/);
+      ).toThrow("contract text ships with the plugin");
+      expect(() =>
+        store.updatePreset(builtin.id, { name: "User preset" }),
+      ).toThrow("contract text ships with the plugin");
       expect(() => store.deletePreset(builtin.id)).toThrow(
-        /ships with the plugin/,
+        "contract text ships with the plugin",
       );
       expect(store.getPreset(builtin.id)).toMatchObject({
         name: "implement",
+        modelId: "user-selected-model",
         instructions: builtin.instructions,
         builtin: true,
       });
@@ -905,8 +928,15 @@ describe("tasks storage", () => {
       expect(
         store.updatePreset(custom.id, {
           instructions: "Updated instructions",
+          name: "Custom renamed",
+          modelId: "custom-model",
         }),
-      ).toMatchObject({ instructions: "Updated instructions", builtin: false });
+      ).toMatchObject({
+        instructions: "Updated instructions",
+        name: "Custom renamed",
+        modelId: "custom-model",
+        builtin: false,
+      });
       expect(store.deletePreset(custom.id)).toBe(true);
       expect(store.getPreset(custom.id)).toBeUndefined();
     } finally {

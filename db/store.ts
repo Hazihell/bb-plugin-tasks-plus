@@ -2125,7 +2125,14 @@ export function createTasksStore(db: PluginDatabase) {
 
   function updatePreset(id: string, input: UpdatePresetInput): Preset {
     const current = requirePreset(id);
-    if (current.builtin) throw new BuiltinPresetError(current.name, "edited");
+    if (
+      current.builtin &&
+      ((input.name !== undefined && input.name !== current.name) ||
+        (input.instructions !== undefined &&
+          input.instructions !== current.instructions))
+    ) {
+      throw new BuiltinPresetError(current.name, "edited");
+    }
     const environment = validatePresetEnvironment({
       environmentKind: input.environmentKind ?? current.environmentKind,
       baseBranch:
@@ -2177,7 +2184,7 @@ export function createTasksStore(db: PluginDatabase) {
       environment.baseBranch,
       environment.machineId,
       input.instructions ?? current.instructions,
-      (input.builtin ?? current.builtin) ? 1 : 0,
+      (current.builtin || input.builtin === true) ? 1 : 0,
       id,
     );
     return requirePreset(id);
