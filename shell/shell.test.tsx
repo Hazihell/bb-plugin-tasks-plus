@@ -1135,6 +1135,69 @@ describe("tasks app shell", () => {
     expect(slot.getAllByLabelText("Spawns a new worktree")).toHaveLength(1);
   });
 
+  it("opens a builtin preset read-only and a custom one in the editor", async () => {
+    const instructions = [
+      "Implement the task end to end.",
+      "",
+      "1. Read the task and its comments.",
+    ].join("\n");
+    const builtin = {
+      id: "01HZZZZZZZZZZZZZZZZZZZZZE3",
+      name: "implement",
+      providerId: "claude-code",
+      modelId: "claude-sonnet-5",
+      reasoningLevel: "medium",
+      serviceTier: null,
+      permissionMode: "accept-edits",
+      environmentKind: "project-default",
+      baseBranch: null,
+      machineId: null,
+      instructions,
+      builtin: true,
+      createdAt: "2026-07-15T00:00:00.000Z",
+    };
+    const slot = renderSlot(
+      navigationRegistration,
+      { subPath: "all" },
+      {
+        rpc: seededRpc({
+          listPresets: () => ({
+            presets: [
+              builtin,
+              {
+                ...builtin,
+                id: "01HZZZZZZZZZZZZZZZZZZZZZE4",
+                name: "Custom",
+                instructions: "",
+                builtin: false,
+              },
+            ],
+          }),
+        }),
+      },
+    );
+    const builtinRow = await slot.findByRole("button", { name: "implement" });
+    expect(builtinRow.getAttribute("title")).toBe("View preset implement");
+    fireEvent.click(builtinRow);
+    const view = await slot.findByRole("dialog");
+    expect(
+      [...view.querySelectorAll("p")].some(
+        (node) => node.textContent === instructions,
+      ),
+    ).toBe(true);
+    expect(slot.queryByRole("button", { name: "Save preset" })).toBeNull();
+    fireEvent.click(slot.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
+
+    // A custom preset still reaches the editor.
+    const customRow = slot.getByRole("button", { name: "Custom" });
+    expect(customRow.getAttribute("title")).toBe("Edit preset Custom");
+    fireEvent.click(customRow);
+    const editor = await slot.findByRole("dialog");
+    expect(editor.textContent?.includes("ships with the plugin")).toBe(false);
+    expect(slot.getByRole("button", { name: "Save preset" })).toBeDefined();
+  });
+
   it("refetches sidebar data when invalidation channels fire", async () => {
     let projectCalls = 0;
     const slot = renderSlot(
