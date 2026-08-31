@@ -13,6 +13,7 @@ import {
 import { useTasksNavigation } from "../../shell/routes.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
 import { TaskActivity } from "../activity/task-activity.js";
+import { ArtifactsSection } from "./artifacts.js";
 import { AttachmentsGrid, uploadAttachment } from "./attachments.js";
 import { BlockersSection } from "./blockers.js";
 import {
@@ -258,6 +259,13 @@ function TaskDetail({ task }: { task: Task }) {
     ["tasks:changed"],
     [task.id],
   );
+  // Artifact writes republish tasks:changed, so this rides the same event.
+  const artifacts = useTasksQuery(
+    async (query) =>
+      (await query.call("listArtifacts", { taskId: task.id })).artifacts,
+    ["tasks:changed"],
+    [task.id],
+  );
   const threads = useTasksQuery(
     async (query) =>
       (await query.call("listTaskThreads", { taskId: task.id })).taskThreads,
@@ -476,6 +484,8 @@ function TaskDetail({ task }: { task: Task }) {
           />
 
           <BlockersSection task={task} onError={(message) => push(message)} />
+
+          <ArtifactsSection artifacts={artifacts.data ?? []} />
 
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}

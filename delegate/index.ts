@@ -19,6 +19,10 @@ import {
   presetPermissionModeSchema,
   type ThreadsChangedEvent,
 } from "../shared/contract";
+import {
+  formatArtifactManifest,
+  type ManifestArtifact,
+} from "../shared/artifact-manifest";
 import { delegationRpcContract } from "./contract";
 
 const MAX_DELEGATED_THREAD_TITLE_LENGTH = 120;
@@ -60,6 +64,7 @@ interface SeedPromptInput {
   task: Task;
   project: Project;
   subtasks: readonly Task[];
+  artifacts: readonly ManifestArtifact[];
   attachments: readonly Pick<Attachment, "id" | "fileName">[];
   recentComments: readonly Comment[];
   presetInstructions: string;
@@ -112,6 +117,11 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
       `- Name: ${input.project.name}\n- Linked bb project: ${input.project.linkedBbProjectId ?? "Not linked"}`,
     ),
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
+    // Above Attachments on purpose: the engineering record outranks files.
+    markdownSection(
+      "Artifacts",
+      formatArtifactManifest(input.task.key, input.artifacts),
+    ),
     markdownSection("Attachments", formatAttachments(input.attachments)),
     markdownSection("Recent comments", formatComments(input.recentComments)),
     markdownSection(
@@ -326,6 +336,7 @@ export function handlers(
         task,
         project,
         subtasks: store.tasks.listSubtasks(task.id),
+        artifacts: store.tasks.listTaskArtifacts(task.id),
         attachments: collectAttachments(store.tasks, task.id, comments),
         recentComments,
         presetInstructions: preset.instructions,
