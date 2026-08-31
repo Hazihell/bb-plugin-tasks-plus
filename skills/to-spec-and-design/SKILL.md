@@ -37,7 +37,7 @@ Give each slice its **blocking edges**: the slices that must complete before it 
 
 5. Write the spec, the design and the breakdown, and put all three to the user at **one gate**. The breakdown is a numbered list giving each slice its **title**, what it **delivers** end to end, and what **blocks** it.
 
-Ask whether the granularity is right, whether each edge genuinely gates its slice, and whether any slices should merge or split. Publish only once the user approves the three together, revising and asking again after each change.
+Ask whether the granularity is right, whether each edge genuinely gates its slice, and whether any slices should merge or split. Ask too which **base branch** the work builds on when it is not the repository default — a campaign branch, a long-lived integration branch — because a dispatch spawns its worktree from the resolved branch, and an unset one silently means the default. Publish only once the user approves the three together, revising and asking again after each change.
 
 6. Publish. The spec is the task description; the design attaches to the same task, separately addressable, so a later integration review can fetch the direction alone and diff the built architecture against it.
 
@@ -45,16 +45,19 @@ One slice means no umbrella. Publish a single task and stop here:
 
 ```sh
 KEY=$(bb tasks-plus create --title "$TITLE" --description-file "$SPEC" \
-  --label ready-for-agent --json | jq -r '.task.key')
+  --label ready-for-agent ${BASE_BRANCH:+--base-branch "$BASE_BRANCH"} --json | jq -r '.task.key')
 bb tasks-plus attachment add "$KEY" --file "$DESIGN" --name approved-plan.md
 ```
 
 Otherwise the parent comes first, unlabelled: `ready-for-agent` says an agent may pick the work up, and an umbrella is not a unit of work.
 
 ```sh
-KEY=$(bb tasks-plus create --title "$TITLE" --description-file "$SPEC" --json | jq -r '.task.key')
+KEY=$(bb tasks-plus create --title "$TITLE" --description-file "$SPEC" \
+  ${BASE_BRANCH:+--base-branch "$BASE_BRANCH"} --json | jq -r '.task.key')
 bb tasks-plus attachment add "$KEY" --file "$DESIGN" --name approved-plan.md
 ```
+
+Set the base branch on the parent only. Slices inherit it, so a slice names one solely to override its parent.
 
 Then one child per slice, in dependency order, from the `<slice-template>` below. Capture every key, because the edges are recorded by key:
 
