@@ -106,7 +106,7 @@ later one that says so, not edited.
 
 ## What this skill does not do
 
-It does not find defects. `/code-review` owns that, and its outcome is a
+It does not find defects. `/review-record` owns that, and its outcome is a
 `review_result` artifact. Narrative review describes a change that has already
 been reviewed, and it does not judge whether to merge.
 
