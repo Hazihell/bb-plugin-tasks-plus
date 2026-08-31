@@ -279,6 +279,10 @@ const MIGRATIONS = [
     CREATE INDEX idx_task_artifacts_task
       ON task_artifacts(task_id, kind, created_at, id);
   `,
+  `
+    ALTER TABLE projects ADD COLUMN base_branch TEXT;
+    ALTER TABLE tasks ADD COLUMN base_branch TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

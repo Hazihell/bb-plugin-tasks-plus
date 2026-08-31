@@ -37,6 +37,7 @@ import {
 } from "../manage/bb-project-link.js";
 import type { BbProjectOption } from "../../shared/contract.js";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -63,6 +64,7 @@ export interface TaskPropertyUpdate {
   status?: TaskStatus;
   priority?: TaskPriority;
   dueDate?: string | null;
+  baseBranch?: string | null;
   labelIds?: string[];
 }
 
@@ -369,6 +371,8 @@ function DispatchTargetMenu({
     emptyBbProjectLinkState,
   );
   const [saving, setSaving] = useState(false);
+  // Empty means "no project branch": tasks in it fall through to the preset.
+  const [branch, setBranch] = useState("");
   const linkedBbProjectId = project.linkedBbProjectId;
   const linkedName = bbProjects.find(
     (candidate) => candidate.id === linkedBbProjectId,
@@ -379,9 +383,11 @@ function DispatchTargetMenu({
     if (saving) return;
     setSaving(true);
     try {
+      const trimmed = branch.trim();
       await rpc.call("updateProject", {
         projectId: project.id,
         linkedBbProjectId: linkedId,
+        baseBranch: trimmed === "" ? null : trimmed,
       });
       setOpen(false);
     } catch (saveError) {
@@ -397,7 +403,10 @@ function DispatchTargetMenu({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) setState(bbProjectLinkStateFor(linkedBbProjectId));
+        if (next) {
+          setState(bbProjectLinkStateFor(linkedBbProjectId));
+          setBranch(project.baseBranch ?? "");
+        }
         setOpen(next);
       }}
     >
@@ -426,6 +435,18 @@ function DispatchTargetMenu({
           bbProjects={bbProjects}
           noneLabel={linkedBbProjectId !== null ? "Unlink" : "Not linked"}
         />
+        <div className="mt-2.5">
+          <div className="mb-1 text-2xs font-semibold text-muted-foreground">
+            Base branch
+          </div>
+          <Input
+            value={branch}
+            placeholder="preset default — leave empty"
+            aria-label="Project base branch"
+            onChange={(event) => setBranch(event.target.value)}
+            className="h-8"
+          />
+        </div>
         <div className="mt-2.5 flex items-center justify-between gap-2">
           {linkedBbProjectId !== null ? (
             <Button
@@ -446,6 +467,95 @@ function DispatchTargetMenu({
             className="h-7"
             disabled={saving}
             onClick={() => void save(resolved === "" ? null : resolved)}
+          >
+            Save
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/**
+ * Editable "Base branch" row for the task itself. Empty means the task
+ * inherits: its parent task, then its project, then the preset decide.
+ */
+function BaseBranchMenu({
+  task,
+  project,
+  onUpdate,
+  triggerClassName,
+}: {
+  task: Task;
+  project: Project | undefined;
+  onUpdate: (update: TaskPropertyUpdate) => void;
+  triggerClassName: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [branch, setBranch] = useState("");
+  const inherited = project?.baseBranch ?? null;
+  const save = (next: string | null) => {
+    onUpdate({ baseBranch: next });
+    setOpen(false);
+  };
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setBranch(task.baseBranch ?? "");
+        setOpen(next);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label="Edit base branch"
+          className={triggerClassName}
+        >
+          <Icon name="GitBranch" className="size-3.5 shrink-0" />
+          {task.baseBranch !== null ? (
+            <span className="truncate">{task.baseBranch}</span>
+          ) : (
+            <span className="truncate text-muted-foreground">
+              {inherited === null ? "Inherited" : `Inherited · ${inherited}`}
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-3">
+        <div className="mb-1 text-2xs font-semibold text-muted-foreground">
+          Base branch
+        </div>
+        <Input
+          value={branch}
+          placeholder="inherit — leave empty"
+          aria-label="Task base branch"
+          onChange={(event) => setBranch(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            save(branch.trim() === "" ? null : branch.trim());
+          }}
+          className="h-8"
+        />
+        <div className="mt-2.5 flex items-center justify-between gap-2">
+          {task.baseBranch !== null ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-muted-foreground"
+              onClick={() => save(null)}
+            >
+              <Icon name="X" className="size-3.5" />
+              Inherit
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button
+            size="sm"
+            className="h-7"
+            onClick={() => save(branch.trim() === "" ? null : branch.trim())}
           >
             Save
           </Button>
@@ -539,6 +649,16 @@ export function PropertiesRail({
       ) : (
         <div className="py-0.5 text-sm text-muted-foreground">…</div>
       )}
+
+      <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
+        Base branch
+      </div>
+      <BaseBranchMenu
+        task={task}
+        project={project}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
 
       <div className="mt-2.5 py-0.5">
         <DispatchControl

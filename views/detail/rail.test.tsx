@@ -26,7 +26,10 @@ afterEach(cleanup);
 const PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP1";
 const BB_PROJECT_ID = "proj_bb0000000000000000000001";
 
-function projectRow(linkedBbProjectId: string | null) {
+function projectRow(
+  linkedBbProjectId: string | null,
+  baseBranch: string | null = null,
+) {
   return {
     id: PROJECT_ID,
     name: "Tasks Plugin",
@@ -35,6 +38,7 @@ function projectRow(linkedBbProjectId: string | null) {
     color: "blue",
     folderId: null,
     linkedBbProjectId,
+    baseBranch,
     createdAt: "2026-07-15T00:00:00.000Z",
   };
 }
@@ -50,6 +54,7 @@ const task = {
   priority: "none",
   dueDate: null,
   parentTaskId: null,
+  baseBranch: null,
   position: 1,
   createdAt: "2026-07-15T00:00:00.000Z",
   updatedAt: "2026-07-15T00:00:00.000Z",
@@ -113,6 +118,7 @@ describe("dispatch target rail control", () => {
     expect(updateCalls[0]).toEqual({
       projectId: PROJECT_ID,
       linkedBbProjectId: BB_PROJECT_ID,
+      baseBranch: null,
     });
   });
 
@@ -148,6 +154,75 @@ describe("dispatch target rail control", () => {
     expect(updateCalls[0]).toEqual({
       projectId: PROJECT_ID,
       linkedBbProjectId: null,
+      baseBranch: null,
     });
+  });
+
+  it("saves a project base branch alongside its dispatch target", async () => {
+    const updateCalls: Array<Record<string, unknown>> = [];
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc(BB_PROJECT_ID, {
+          listBbProjects: () => ({
+            bbProjects: [{ id: BB_PROJECT_ID, name: "bb monorepo" }],
+          }),
+          updateProject: (input: Record<string, unknown>) => {
+            updateCalls.push(input);
+            return {
+              project: projectRow(
+                BB_PROJECT_ID,
+                input.baseBranch as string | null,
+              ),
+            };
+          },
+        }),
+      },
+    );
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit dispatch target" }),
+    );
+    fireEvent.change(await slot.findByLabelText("Project base branch"), {
+      target: { value: " release-redesign " },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateCalls).toHaveLength(1));
+    expect(updateCalls[0]).toMatchObject({ baseBranch: "release-redesign" });
+  });
+});
+
+describe("task base branch rail control", () => {
+  it("sets the task's own branch and clears it back to inherited", async () => {
+    const updateCalls: Array<Record<string, unknown>> = [];
+    const rpc = detailRpc(BB_PROJECT_ID, {
+      updateTask: (input: Record<string, unknown>) => {
+        updateCalls.push(input);
+        return { ok: true, task };
+      },
+    });
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      { rpc },
+    );
+
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit base branch" }),
+    );
+    fireEvent.change(await slot.findByLabelText("Task base branch"), {
+      target: { value: "feature/one" },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateCalls).toHaveLength(1));
+    expect(updateCalls[0]).toMatchObject({ baseBranch: "feature/one" });
+
+    // An empty draft means "inherit", not "a branch named empty string".
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit base branch" }),
+    );
+    fireEvent.click(slot.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateCalls).toHaveLength(2));
+    expect(updateCalls[1]).toMatchObject({ baseBranch: null });
   });
 });

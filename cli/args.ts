@@ -15,6 +15,7 @@ const VALUELESS_FLAGS = new Set([
   "active",
   "help",
   "json",
+  "no-base-branch",
   "no-due",
   "no-folder",
   "no-parent",

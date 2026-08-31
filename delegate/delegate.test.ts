@@ -280,6 +280,160 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("dispatches a sub-task from the nearest branch its ancestry names", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_inherited" }),
+          get: async () =>
+            makeThreadResponse({ id: "thr_inherited", status: "starting" }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Inheriting project",
+      prefix: "INH",
+      color: "blue",
+      linkedBbProjectId: "proj_demo",
+      baseBranch: "project-branch",
+    });
+    const parent = store.tasks.createTask({
+      projectId: project.id,
+      title: "Parent epic",
+      baseBranch: "parent-branch",
+    });
+    const subtask = store.tasks.createTask({
+      projectId: project.id,
+      title: "Sub-task without its own branch",
+      parentTaskId: parent.id,
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store, {
+      environmentKind: "new-worktree",
+      baseBranch: "preset-branch",
+      machineId: "host_remote",
+    });
+
+    await harness.callRpc("delegate", {
+      taskId: subtask.id,
+      presetId: preset.id,
+    });
+
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([
+      [
+        expect.objectContaining({
+          environment: expect.objectContaining({
+            workspace: {
+              type: "managed-worktree",
+              baseBranch: { kind: "named", name: "parent-branch" },
+            },
+          }),
+        }),
+      ],
+    ]);
+
+    await harness.dispose();
+  });
+
+  it("dispatches from the task's own branch over its project and preset", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_own_branch" }),
+          get: async () =>
+            makeThreadResponse({ id: "thr_own_branch", status: "starting" }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Overriding project",
+      prefix: "OVR",
+      color: "blue",
+      linkedBbProjectId: "proj_demo",
+      baseBranch: "project-branch",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Task with its own branch",
+      baseBranch: "task-branch",
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store, {
+      environmentKind: "new-worktree",
+      baseBranch: "preset-branch",
+      machineId: "host_remote",
+    });
+
+    await harness.callRpc("delegate", {
+      taskId: task.id,
+      presetId: preset.id,
+    });
+
+    expect(harness.sdk.callsTo("threads.spawn")).toEqual([
+      [
+        expect.objectContaining({
+          environment: expect.objectContaining({
+            workspace: {
+              type: "managed-worktree",
+              baseBranch: { kind: "named", name: "task-branch" },
+            },
+          }),
+        }),
+      ],
+    ]);
+
+    await harness.dispose();
+  });
+
+  it("names the resolved branch, not the preset's, when the spawn is rejected", async () => {
+    const spawnError = Object.assign(
+      new Error("HTTP 400: Unknown base branch"),
+      { code: "invalid_request", status: 400 },
+    );
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => {
+            throw spawnError;
+          },
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Resolved branch error",
+      prefix: "RBE",
+      color: "blue",
+      linkedBbProjectId: "proj_demo",
+      baseBranch: "project-branch",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      title: "Reject the project branch",
+    });
+    registerDelegation(bb, store);
+    const preset = createTestPreset(store, {
+      environmentKind: "new-worktree",
+      baseBranch: "preset-branch",
+      machineId: "host_missing",
+    });
+
+    await expect(
+      harness.callRpc("delegate", { taskId: task.id, presetId: preset.id }),
+    ).rejects.toMatchObject({
+      code: "handler_error",
+      message:
+        "Could not create a worktree on host_missing from project-branch: Unknown base branch",
+    });
+
+    await harness.dispose();
+  });
+
   it("maps a rejected worktree target to a friendly typed delegation error", async () => {
     const spawnError = Object.assign(new Error("HTTP 404: Host not found"), {
       code: "host_not_found",

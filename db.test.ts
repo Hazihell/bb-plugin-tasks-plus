@@ -59,7 +59,7 @@ describe("tasks storage", () => {
             { count: number }
           >("SELECT COUNT(*) AS count FROM schema_version")
           .get()?.count,
-      ).toBe(8);
+      ).toBe(9);
     } finally {
       await harness.dispose();
     }
@@ -331,6 +331,52 @@ describe("tasks storage", () => {
 
       expect([first.key, second.key]).toEqual(["TSK-1", "TSK-2"]);
       expect(store.getProject(project.id)?.nextTaskNumber).toBe(3);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("stores, clears, and rejects blank base branches on projects and tasks", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = store.createProject({
+        name: "Base branch project",
+        prefix: "BB",
+        color: "blue",
+        baseBranch: "release-redesign",
+      });
+      expect(project.baseBranch).toBe("release-redesign");
+      const task = store.createTask({
+        projectId: project.id,
+        title: "Carries its own branch",
+        baseBranch: "feature/one",
+      });
+      expect(task.baseBranch).toBe("feature/one");
+
+      // A default-created row inherits by carrying nothing of its own.
+      expect(
+        store.createTask({ projectId: project.id, title: "Inherits" })
+          .baseBranch,
+      ).toBe(null);
+
+      expect(
+        store.updateProject(project.id, { baseBranch: null }).baseBranch,
+      ).toBe(null);
+      expect(store.updateTask(task.id, { baseBranch: null }).baseBranch).toBe(
+        null,
+      );
+      // An untouched update must not disturb the stored branch.
+      store.updateTask(task.id, { baseBranch: "main" });
+      expect(store.updateTask(task.id, { title: "Renamed" }).baseBranch).toBe(
+        "main",
+      );
+
+      expect(() =>
+        store.updateProject(project.id, { baseBranch: "  " }),
+      ).toThrow("Project baseBranch");
+      expect(() => store.updateTask(task.id, { baseBranch: "" })).toThrow(
+        "Task baseBranch",
+      );
     } finally {
       await harness.dispose();
     }

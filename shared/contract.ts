@@ -137,6 +137,7 @@ const projectSchema = z
     color: z.string(),
     folderId: idSchema.nullable(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable(),
+    baseBranch: nullablePresetTargetSchema,
     createdAt: z.string(),
   })
   .strict();
@@ -153,6 +154,7 @@ const taskSchema = z
     priority: taskPrioritySchema,
     dueDate: calendarDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
+    baseBranch: nullablePresetTargetSchema,
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -550,6 +552,7 @@ const updateTaskInputSchema = z
     priority: taskPrioritySchema.optional(),
     dueDate: calendarDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
+    baseBranch: nullablePresetTargetSchema.optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
@@ -562,6 +565,7 @@ const updateTaskInputSchema = z
       input.priority !== undefined ||
       input.dueDate !== undefined ||
       input.parentTaskId !== undefined ||
+      input.baseBranch !== undefined ||
       input.labelIds !== undefined,
     { message: "at least one task field must be updated" },
   );
@@ -573,6 +577,7 @@ const updateProjectInputSchema = z
     color: nonBlankStringSchema.optional(),
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable().optional(),
+    baseBranch: nullablePresetTargetSchema.optional(),
   })
   .strict()
   .refine(
@@ -580,7 +585,8 @@ const updateProjectInputSchema = z
       input.name !== undefined ||
       input.color !== undefined ||
       input.folderId !== undefined ||
-      input.linkedBbProjectId !== undefined,
+      input.linkedBbProjectId !== undefined ||
+      input.baseBranch !== undefined,
     { message: "at least one project field must be updated" },
   );
 
@@ -699,6 +705,7 @@ export const tasksRpcContract = defineRpcContract({
           .startsWith("proj_")
           .nullable()
           .default(null),
+        baseBranch: nullablePresetTargetSchema.default(null),
       })
       .strict(),
     output: z.object({ project: projectSchema }).strict(),
@@ -733,6 +740,7 @@ export const tasksRpcContract = defineRpcContract({
         priority: taskPrioritySchema.default("none"),
         dueDate: calendarDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
+        baseBranch: nullablePresetTargetSchema.default(null),
         labelIds: taskLabelsSchema.default([]),
       })
       .strict(),

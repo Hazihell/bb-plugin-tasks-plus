@@ -24,6 +24,7 @@ import {
   type ManifestArtifact,
 } from "../shared/artifact-manifest";
 import { delegationRpcContract } from "./contract";
+import { resolveBaseBranch } from "./base-branch";
 
 const MAX_DELEGATED_THREAD_TITLE_LENGTH = 120;
 const SYSTEM_AUTHOR_NAME = "Tasks";
@@ -204,6 +205,7 @@ type SpawnEnvironment = Parameters<
 async function presetSpawnEnvironment(
   bb: BbPluginApi,
   preset: Preset,
+  baseBranch: string | null,
 ): Promise<SpawnEnvironment> {
   if (preset.environmentKind === "project-default") {
     return { type: "project-default" };
@@ -223,9 +225,9 @@ async function presetSpawnEnvironment(
     workspace: {
       type: "managed-worktree",
       baseBranch:
-        preset.baseBranch === null
+        baseBranch === null
           ? { kind: "default" }
-          : { kind: "named", name: preset.baseBranch },
+          : { kind: "named", name: baseBranch },
     },
   };
 }
@@ -251,7 +253,11 @@ const SPAWN_TARGET_ERROR_CODES = new Set([
   "workspace_unavailable",
 ]);
 
-function mapSpawnTargetError(error: unknown, preset: Preset): never {
+function mapSpawnTargetError(
+  error: unknown,
+  preset: Preset,
+  baseBranch: string | null,
+): never {
   if (
     preset.environmentKind === "new-worktree" &&
     isBbHttpError(error) &&
@@ -259,7 +265,7 @@ function mapSpawnTargetError(error: unknown, preset: Preset): never {
     SPAWN_TARGET_ERROR_CODES.has(error.code)
   ) {
     const machine = preset.machineId ?? "the default machine";
-    const branch = preset.baseBranch ?? "the default branch";
+    const branch = baseBranch ?? "the default branch";
     const detail = error.message.replace(/^HTTP \d+:\s*/u, "");
     throw new DelegationError(
       "spawn_target_invalid",
@@ -343,7 +349,15 @@ export function handlers(
         extraInstructions: input.extraInstructions,
       });
 
-      const environment = await presetSpawnEnvironment(bb, preset);
+      // The branch is resolved once and used for both the spawn and its
+      // error message, so a failure names the branch actually attempted.
+      const baseBranch = resolveBaseBranch({
+        task,
+        project,
+        preset,
+        getTask: (taskId) => store.tasks.getTask(taskId),
+      });
+      const environment = await presetSpawnEnvironment(bb, preset, baseBranch);
       const thread = await bb.sdk.threads
         .spawn({
           projectId: linkedBbProjectId,
@@ -358,7 +372,9 @@ export function handlers(
           title,
           prompt,
         })
-        .catch((error: unknown) => mapSpawnTargetError(error, preset));
+        .catch((error: unknown) =>
+          mapSpawnTargetError(error, preset, baseBranch),
+        );
 
       const taskThread = store.transaction(() => {
         const attached = store.tasks.upsertTaskThread({

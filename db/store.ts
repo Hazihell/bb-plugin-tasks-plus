@@ -107,6 +107,7 @@ interface ProjectRow {
   color: string;
   folder_id: string | null;
   linked_bb_project_id: string | null;
+  base_branch: string | null;
   created_at: string;
 }
 
@@ -121,6 +122,7 @@ interface TaskRow {
   priority: Task["priority"];
   due_date: string | null;
   parent_task_id: string | null;
+  base_branch: string | null;
   position: number;
   created_at: string;
   updated_at: string;
@@ -365,6 +367,17 @@ function validateLinkedBbProjectId(id: string | null): string | null {
   return id;
 }
 
+/**
+ * A base branch is either absent (inherit from a broader scope) or a real
+ * branch name; a blank string is a mistake, never "no branch".
+ */
+function validateBaseBranch(
+  branch: string | null,
+  label: string,
+): string | null {
+  return branch === null ? null : requireNonEmpty(branch, label);
+}
+
 function validateThreadId(id: string): string;
 function validateThreadId(id: null): null;
 function validateThreadId(id: string | null): string | null;
@@ -409,6 +422,7 @@ function projectFromRow(row: ProjectRow): Project {
     color: row.color,
     folderId: row.folder_id,
     linkedBbProjectId: row.linked_bb_project_id,
+    baseBranch: row.base_branch,
     createdAt: row.created_at,
   };
 }
@@ -425,6 +439,7 @@ function taskFromRow(row: TaskRow): Task {
     priority: row.priority,
     dueDate: row.due_date,
     parentTaskId: row.parent_task_id,
+    baseBranch: row.base_branch,
     position: row.position,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -765,12 +780,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId = input.folderId ?? null;
     if (folderId !== null) requireFolder(folderId);
     db.prepare<
-      [string, string, string, string, string | null, string | null, string]
+      [
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
     >(
       `
       INSERT INTO projects
-        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, created_at)
-      VALUES (?, ?, ?, 1, ?, ?, ?, ?)
+        (id, name, prefix, next_task_number, color, folder_id, linked_bb_project_id, base_branch, created_at)
+      VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
     `,
     ).run(
       id,
@@ -779,6 +803,7 @@ export function createTasksStore(db: PluginDatabase) {
       requireNonEmpty(input.color, "Project color"),
       folderId,
       validateLinkedBbProjectId(input.linkedBbProjectId ?? null),
+      validateBaseBranch(input.baseBranch ?? null, "Project baseBranch"),
       nowIso(),
     );
     return requireProject(id);
@@ -816,10 +841,21 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId =
       input.folderId === undefined ? current.folderId : input.folderId;
     if (folderId !== null) requireFolder(folderId);
-    db.prepare<[string, string, string, string | null, string | null, string]>(
+    db.prepare<
+      [
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string,
+      ]
+    >(
       `
       UPDATE projects
-      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?
+      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?,
+        base_branch = ?
       WHERE id = ?
     `,
     ).run(
@@ -836,6 +872,9 @@ export function createTasksStore(db: PluginDatabase) {
       input.linkedBbProjectId === undefined
         ? current.linkedBbProjectId
         : validateLinkedBbProjectId(input.linkedBbProjectId),
+      input.baseBranch === undefined
+        ? current.baseBranch
+        : validateBaseBranch(input.baseBranch, "Project baseBranch"),
       id,
     );
     return requireProject(id);
@@ -949,6 +988,7 @@ export function createTasksStore(db: PluginDatabase) {
           Task["priority"],
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -957,8 +997,8 @@ export function createTasksStore(db: PluginDatabase) {
         `
       INSERT INTO tasks (
         id, project_id, number, title, description, status, priority, due_date,
-        parent_task_id, position, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        parent_task_id, base_branch, position, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
       ).run(
         id,
@@ -970,6 +1010,7 @@ export function createTasksStore(db: PluginDatabase) {
         input.priority ?? "none",
         validateDueDate(input.dueDate ?? null),
         parentTaskId,
+        validateBaseBranch(input.baseBranch ?? null, "Task baseBranch"),
         position,
         createdAt,
         createdAt,
@@ -1378,6 +1419,7 @@ export function createTasksStore(db: PluginDatabase) {
           Task["priority"],
           string | null,
           string | null,
+          string | null,
           number,
           string,
           string,
@@ -1386,7 +1428,7 @@ export function createTasksStore(db: PluginDatabase) {
         `
         UPDATE tasks SET
           title = ?, description = ?, status = ?, priority = ?, due_date = ?,
-          parent_task_id = ?, position = ?, updated_at = ?
+          parent_task_id = ?, base_branch = ?, position = ?, updated_at = ?
         WHERE id = ?
       `,
       ).run(
@@ -1400,6 +1442,9 @@ export function createTasksStore(db: PluginDatabase) {
           ? current.dueDate
           : validateDueDate(input.dueDate),
         parentTaskId,
+        input.baseBranch === undefined
+          ? current.baseBranch
+          : validateBaseBranch(input.baseBranch, "Task baseBranch"),
         position,
         nowIso(),
         id,

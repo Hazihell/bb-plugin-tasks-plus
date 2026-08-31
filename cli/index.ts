@@ -87,10 +87,10 @@ Commands:
 Run bb tasks-plus <command> --help for command usage.`;
 
 const PROJECT_HELP = `Usage:
-  bb tasks-plus project create --name <name> [--prefix X] [--folder <id-or-name>] [--link-bb-project <proj_id>] [--color <color>] [--json]
+  bb tasks-plus project create --name <name> [--prefix X] [--folder <id-or-name>] [--link-bb-project <proj_id>] [--base-branch <branch>] [--color <color>] [--json]
   bb tasks-plus project list [--json]
   bb tasks-plus project show <prefix-or-id> [--json]
-  bb tasks-plus project update <prefix-or-id> [--name <name>] [--color <color>] [--folder <id-or-name> | --no-folder] [--link-bb-project <proj_id> | --unlink-bb-project] [--rename-prefix X] [--json]`;
+  bb tasks-plus project update <prefix-or-id> [--name <name>] [--color <color>] [--folder <id-or-name> | --no-folder] [--link-bb-project <proj_id> | --unlink-bb-project] [--base-branch <branch> | --no-base-branch] [--rename-prefix X] [--json]`;
 
 const FOLDER_HELP = `Usage:
   bb tasks-plus folder create --name <name> [--parent <id-or-name>] [--json]
@@ -102,11 +102,11 @@ Deleting a folder moves its projects and subfolders to the top level. No
 tasks are deleted.`;
 
 const CREATE_HELP =
-  "Usage: bb tasks-plus create [--project <prefix-or-id>] --title <title> [--description <markdown> | --description-file <path>] [--priority <priority>] [--label <name>]... [--due YYYY-MM-DD] [--parent <key-or-id>] [--attach <path>]... [--machine <id-or-name>] [--json]";
+  "Usage: bb tasks-plus create [--project <prefix-or-id>] --title <title> [--description <markdown> | --description-file <path>] [--priority <priority>] [--label <name>]... [--due YYYY-MM-DD] [--parent <key-or-id>] [--base-branch <branch>] [--attach <path>]... [--machine <id-or-name>] [--json]";
 const LIST_HELP = `Usage: bb tasks-plus list [--project <prefix-or-id>] [--status <status>]... [--priority <priority>]... [--label <name>]... [--active] [--search <query>] [--sort manual|priority|due] [--limit <1-${TASKS_PAGE_MAX_LIMIT}>] [--cursor <opaque>] [--json]`;
 const SHOW_HELP = "Usage: bb tasks-plus show <key-or-id> [--json]";
 const UPDATE_HELP =
-  "Usage: bb tasks-plus update <key-or-id> [--status <status>] [--priority <priority>] [--title <title>] [--description <markdown> | --description-file <path>] [--due YYYY-MM-DD | --no-due] [--parent <key-or-id> | --no-parent] [--add-label <name>]... [--remove-label <name>]... [--machine <id-or-name>] [--json]";
+  "Usage: bb tasks-plus update <key-or-id> [--status <status>] [--priority <priority>] [--title <title>] [--description <markdown> | --description-file <path>] [--due YYYY-MM-DD | --no-due] [--parent <key-or-id> | --no-parent] [--base-branch <branch> | --no-base-branch] [--add-label <name>]... [--remove-label <name>]... [--machine <id-or-name>] [--json]";
 const COMMENT_HELP =
   "Usage: bb tasks-plus comment <key-or-id> (--body <markdown> | --body-file <path>) [--author <name>] [--machine <id-or-name>] [--notify] [--json]";
 const LABEL_HELP = `Usage:
@@ -647,6 +647,7 @@ async function runProject(
       "prefix",
       "folder",
       "link-bb-project",
+      "base-branch",
       "color",
     ]);
     requirePositionals(args, 0, PROJECT_HELP.split("\n")[1]!.trim());
@@ -666,6 +667,7 @@ async function runProject(
           color: option(args, "color") ?? DEFAULT_PROJECT_COLOR,
           folderId: folder?.id ?? null,
           linkedBbProjectId: option(args, "link-bb-project") ?? null,
+          baseBranch: option(args, "base-branch") ?? null,
         }),
       ),
     );
@@ -704,6 +706,7 @@ async function runProject(
       ["Color", project.color],
       ["Folder", folder?.name ?? "-"],
       ["BB project", project.linkedBbProjectId ?? "-"],
+      ["Base branch", project.baseBranch ?? "-"],
       ["Next task", `${project.prefix}-${project.nextTaskNumber}`],
       ["Created", project.createdAt],
     ]);
@@ -712,8 +715,15 @@ async function runProject(
   if (action === "update") {
     assertAllowed(
       args,
-      ["name", "color", "folder", "link-bb-project", "rename-prefix"],
-      ["no-folder", "unlink-bb-project"],
+      [
+        "name",
+        "color",
+        "folder",
+        "link-bb-project",
+        "base-branch",
+        "rename-prefix",
+      ],
+      ["no-folder", "unlink-bb-project", "no-base-branch"],
     );
     const [address] = requirePositionals(
       args,
@@ -735,6 +745,13 @@ async function runProject(
       "link-bb-project",
       "unlink-bb-project",
     );
+    const baseBranch = option(args, "base-branch");
+    validateSingleFlagChoice(
+      baseBranch,
+      args.flags.has("no-base-branch"),
+      "base-branch",
+      "no-base-branch",
+    );
     const folder = folderAddress
       ? await resolveFolder(domain, folderAddress)
       : undefined;
@@ -745,6 +762,7 @@ async function runProject(
       linkedBbProjectId: args.flags.has("unlink-bb-project")
         ? null
         : linkedBbProjectId,
+      baseBranch: args.flags.has("no-base-branch") ? null : baseBranch,
     };
     const renamePrefix = option(args, "rename-prefix");
     if (
@@ -752,7 +770,8 @@ async function runProject(
       changes.name === undefined &&
       changes.color === undefined &&
       changes.folderId === undefined &&
-      changes.linkedBbProjectId === undefined
+      changes.linkedBbProjectId === undefined &&
+      changes.baseBranch === undefined
     ) {
       throw new CliError("no project changes were provided");
     }
@@ -767,7 +786,8 @@ async function runProject(
       changes.name !== undefined ||
       changes.color !== undefined ||
       changes.folderId !== undefined ||
-      changes.linkedBbProjectId !== undefined;
+      changes.linkedBbProjectId !== undefined ||
+      changes.baseBranch !== undefined;
     const updateInput = hasFieldChanges
       ? tasksRpcContract.updateProject.input.parse({
           projectId: project.id,
@@ -789,6 +809,7 @@ async function runProject(
         color: updateInput?.color,
         folderId: updateInput?.folderId,
         linkedBbProjectId: updateInput?.linkedBbProjectId,
+        baseBranch: updateInput?.baseBranch,
       }),
     );
     publishProjectsChanged(bb, updated.id);
@@ -974,6 +995,7 @@ async function runCreate(
       "label",
       "due",
       "parent",
+      "base-branch",
       "attach",
       "machine",
     ]);
@@ -1035,6 +1057,7 @@ async function runCreate(
       priority: option(args, "priority") ?? "none",
       dueDate: option(args, "due") ?? null,
       parentTaskId: parent?.id ?? null,
+      baseBranch: option(args, "base-branch") ?? null,
       labelIds,
     });
     const task = unwrapTask(
@@ -1321,6 +1344,7 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
       ["Priority", task.priority],
       ["Due", task.dueDate ?? "-"],
       ["Parent", task.parentTaskId ?? "-"],
+      ["Base branch", task.baseBranch ?? "-"],
       ["Labels", labels.map((label) => label.name).join(", ") || "-"],
       ["Created", task.createdAt],
       ["Updated", task.updatedAt],
@@ -1415,11 +1439,12 @@ async function runUpdate(
       "description-file",
       "due",
       "parent",
+      "base-branch",
       "add-label",
       "remove-label",
       "machine",
     ],
-    ["no-due", "no-parent"],
+    ["no-due", "no-parent", "no-base-branch"],
   );
   const [address] = requirePositionals(args, 1, UPDATE_HELP);
   const task = await resolveTask(domain, address!);
@@ -1431,6 +1456,13 @@ async function runUpdate(
     args.flags.has("no-parent"),
     "parent",
     "no-parent",
+  );
+  const baseBranch = option(args, "base-branch");
+  validateSingleFlagChoice(
+    baseBranch,
+    args.flags.has("no-base-branch"),
+    "base-branch",
+    "no-base-branch",
   );
   const parent =
     parentAddress === undefined
@@ -1474,6 +1506,8 @@ async function runUpdate(
     !args.flags.has("no-due") &&
     parentAddress === undefined &&
     !args.flags.has("no-parent") &&
+    baseBranch === undefined &&
+    !args.flags.has("no-base-branch") &&
     !labelsChanged
   ) {
     throw new CliError("no task changes were provided");
@@ -1491,6 +1525,7 @@ async function runUpdate(
           parentAddress === undefined && !args.flags.has("no-parent")
             ? undefined
             : (parent?.id ?? null),
+        baseBranch: args.flags.has("no-base-branch") ? null : baseBranch,
         labelIds: labelsChanged ? [...nextLabels] : undefined,
         authorName: taskAuthor(ctx),
       }),

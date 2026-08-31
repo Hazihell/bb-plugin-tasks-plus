@@ -34,6 +34,8 @@ export interface Project {
   color: string;
   folderId: string | null;
   linkedBbProjectId: string | null;
+  /** Default worktree base branch for every task in this project. */
+  baseBranch: string | null;
   createdAt: string;
 }
 
@@ -48,6 +50,8 @@ export interface Task {
   priority: TaskPriority;
   dueDate: string | null;
   parentTaskId: string | null;
+  /** Worktree base branch for this task; null inherits from its ancestry. */
+  baseBranch: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -184,6 +188,7 @@ export interface CreateProjectInput {
   color: string;
   folderId?: string | null;
   linkedBbProjectId?: string | null;
+  baseBranch?: string | null;
 }
 
 export interface UpdateProjectInput {
@@ -192,6 +197,7 @@ export interface UpdateProjectInput {
   color?: string;
   folderId?: string | null;
   linkedBbProjectId?: string | null;
+  baseBranch?: string | null;
 }
 
 export interface CreateTaskInput {
@@ -203,6 +209,7 @@ export interface CreateTaskInput {
   priority?: TaskPriority;
   dueDate?: string | null;
   parentTaskId?: string | null;
+  baseBranch?: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -212,6 +219,7 @@ export interface UpdateTaskInput {
   priority?: TaskPriority;
   dueDate?: string | null;
   parentTaskId?: string | null;
+  baseBranch?: string | null;
 }
 
 export interface ListTasksFilters {

@@ -269,6 +269,126 @@ describe("bb tasks-plus CLI", () => {
     await harness.dispose();
   });
 
+  it("sets and clears the base branch on projects and tasks", async () => {
+    const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+    await plugin(bb);
+
+    const project = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "project",
+          "create",
+          "--name",
+          "Branching",
+          "--prefix",
+          "BRN",
+          "--base-branch",
+          "release-redesign",
+          "--json",
+        ]),
+      ),
+    ).project;
+    expect(project.baseBranch).toBe("release-redesign");
+
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "project",
+            "update",
+            "BRN",
+            "--no-base-branch",
+            "--json",
+          ]),
+        ),
+      ).project.baseBranch,
+    ).toBe(null);
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "project",
+            "update",
+            "BRN",
+            "--base-branch",
+            "main",
+            "--json",
+          ]),
+        ),
+      ).project.baseBranch,
+    ).toBe("main");
+
+    const task = JSON.parse(
+      stdout(
+        await harness.runCli([
+          "create",
+          "--project",
+          "BRN",
+          "--title",
+          "Owns a branch",
+          "--base-branch",
+          "feature/one",
+          "--json",
+        ]),
+      ),
+    ).task;
+    expect(task.baseBranch).toBe("feature/one");
+
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "update",
+            task.key,
+            "--base-branch",
+            "feature/two",
+            "--json",
+          ]),
+        ),
+      ).task.baseBranch,
+    ).toBe("feature/two");
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "update",
+            task.key,
+            "--no-base-branch",
+            "--json",
+          ]),
+        ),
+      ).task.baseBranch,
+    ).toBe(null);
+
+    expect(stdout(await harness.runCli(["show", task.key]))).toContain(
+      "Base branch",
+    );
+    expect(stdout(await harness.runCli(["project", "show", "BRN"]))).toContain(
+      "Base branch  main",
+    );
+
+    await expect(
+      harness.runCli([
+        "update",
+        task.key,
+        "--base-branch",
+        "x",
+        "--no-base-branch",
+      ]),
+    ).resolves.toMatchObject({
+      exitCode: 1,
+      stderr: "--base-branch and --no-base-branch cannot be combined",
+    });
+    await expect(
+      harness.runCli(["update", task.key, "--base-branch", " "]),
+    ).resolves.toMatchObject({ exitCode: 1 });
+    await expect(
+      harness.runCli(["project", "update", "BRN", "--base-branch", " "]),
+    ).resolves.toMatchObject({ exitCode: 1 });
+
+    await harness.dispose();
+  });
+
   it("assigns and promotes task parents by key or ID with stable JSON output", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     await plugin(bb);
