@@ -77,6 +77,9 @@ here. The only thing needing a redo is the import rewrite:
 The plugin ships the skills under `skills/`:
 
 - `tasks-plus` — teaches workers how to report progress back to tasks.
+- `narrative-review` — writes a reviewed change up for a human as a `review`
+  artifact: concerns grouped by behaviour rather than by file, each with the
+  reason it exists and the few line ranges worth reading, pinned to one commit.
 - `to-spec-and-design` — turns a conversation into a spec and a system design,
   approved at one gate and published as two separately fetchable documents on
   the same task: the spec as the description, the design as an
