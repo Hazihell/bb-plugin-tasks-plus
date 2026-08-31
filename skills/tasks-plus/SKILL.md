@@ -104,7 +104,8 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
    description image reference together with the row and blob.
 
    File paths (`--file`, `--attach`, `--out`, `--description-file`,
-   `--body-file`) are read from and written to the invoking machine: inside
+   `--body-file`, `--meta-file`) are read from and written to the invoking
+   machine: inside
    an agent thread that is the thread's machine, so local paths just work.
    Outside a thread they target the server's machine; pass
    `--machine <id-or-name>` to address files on another enrolled machine.
@@ -138,6 +139,44 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
    ```sh
    bb tasks-plus detach ABC-12 --thread thr_dead_predecessor
    ```
+
+## Artifacts
+
+Comments narrate; artifacts are the durable record. Attach one whenever the
+work produces something a later reader must be able to trust: an approved or
+implementation plan, a decision, evidence that a check ran, a review, or a
+review result.
+
+```sh
+bb tasks-plus artifact add ABC-12 --kind evidence \
+  --title "CLI suite passes" --meta-file /tmp/evidence.json
+```
+
+`--meta-file` is required and holds a JSON object whose fields depend on the
+kind — pass a file, not shell-quoted JSON:
+
+- `approved_plan`, `implementation_plan` — `approvedBy`, `approvedAt`
+  (`YYYY-MM-DD`)
+- `decision` — `discovery`, `decision`, `why`, `impact`
+- `evidence` — `command`, `exitCode`, `evidenceKind` (`unit`, `integration`,
+  `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`,
+  `security`, `manual`)
+- `review` — `baseRef`, `headSha`, `environmentId`, `concerns`
+- `review_result` — `verdict` (`pass`/`fail`/`mixed`), `findingCounts`
+
+Add `--body <markdown>` or `--body-file <path>` for the narrative, `--url` for
+an external link, and `--attach <path>` to store a payload — a log, a diff, a
+report — alongside the artifact in one call. Run inside an agent thread and the
+artifact records which thread wrote it.
+
+```sh
+bb tasks-plus artifact list ABC-12 --kind decision --kind evidence
+bb tasks-plus artifact show <artifact-id>
+bb tasks-plus artifact remove <artifact-id>
+```
+
+Artifacts are append-only: there is no edit. A record that turned out wrong is
+removed and re-added, or superseded by a later one that says so.
 
 ## Blockers
 
