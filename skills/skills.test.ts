@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { BUILTIN_PRESETS } from "../db/builtin-presets.js";
 import { tasksRpcContract } from "../shared/contract.js";
 
 const skillsDir = dirname(fileURLToPath(import.meta.url));
@@ -178,4 +179,34 @@ describe("commands the skills tell agents to run", () => {
       expect(cli).toMatch(new RegExp(`bb tasks-plus ${command}\\b`));
     },
   );
+});
+
+/**
+ * A preset instruction is executed by a model, so a skill the preset names must
+ * be one a model may invoke. `disable-model-invocation` blocks every model call,
+ * not just a spontaneous one, so setting it on a step the preset requires makes
+ * the plugin's own workflow unrunnable — which is exactly what happened once.
+ */
+describe("skills the builtin presets tell a worker to run", () => {
+  const required = [
+    ...new Set(
+      BUILTIN_PRESETS.flatMap((preset) =>
+        [...preset.instructions.matchAll(/`\/([a-z-]+)`/g)].map(
+          ([, name]) => name ?? "",
+        ),
+      ),
+    ),
+  ]
+    .filter((name) => skillNames.includes(name))
+    .sort();
+
+  it("names at least one shipped skill", () => {
+    expect(required.length).toBeGreaterThan(0);
+  });
+
+  it.each(required)("%s does not refuse model invocation", (name) => {
+    expect(frontmatterField(readSkill(name), "disable-model-invocation")).toBe(
+      undefined,
+    );
+  });
 });
