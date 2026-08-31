@@ -26,30 +26,15 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
 
 ### The implement preset
 
-A preset's `--instructions` are appended to every seed prompt it dispatches, so
-the preset is where a working thread's lifecycle is defined, not the task
-description. The `implement` preset carries the standard contract: the dispatched
-thread owns the task end to end and never decomposes it into new tasks.
+A preset's `--instructions` ride on every seed prompt it dispatches, so a working
+thread's lifecycle belongs in the preset, not in each task description. The
+`implement` preset carries this project's contract: one thread owns the task end
+to end — read, investigate, plan as an artifact, `/implement`, evidence and
+decisions as it goes, `/narrative-review`, PR, `in_review` — and never splits it
+into new tasks.
 
-1. Read the task, its parent, and every blocker; fetch the attachments and read
-   the artifacts before forming an opinion.
-2. Investigate the code before planning.
-3. Record the plan as an `implementation_plan` artifact before any code exists.
-4. Call `/implement` — it already guarantees `/tdd` at pre-agreed seams,
-   `/code-review`, and a commit. Subagents are for execution inside it, never for
-   splitting the task; only the working thread writes artifacts and comments.
-5. Record each meaningful check as an `evidence` artifact as it runs, failures
-   included.
-6. Record material discoveries as `decision` artifacts — behaviour, architecture,
-   data model, dependencies, contracts, security, performance, and any deviation
-   from the approved direction. A rename or an extracted local function is not
-   one.
-7. Run `/narrative-review` against the landed commit, then open a PR.
-8. Set `in_review` with one closing comment; a human sets `done`.
-
-Change the contract with `bb tasks-plus preset update implement --instructions
-<text>`, and check it by dispatching a throwaway task and reading the seed prompt
-in the spawned thread's log.
+`bb tasks-plus preset show implement` is the live text. After changing it,
+dispatch a throwaway task and read the seed prompt in the spawned thread's log.
 
 ## Work a task
 
