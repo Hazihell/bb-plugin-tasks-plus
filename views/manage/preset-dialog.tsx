@@ -198,6 +198,11 @@ export function PresetDialog({
       ? ({ kind: "host", hostId: draft.machineId.trim() } as const)
       : undefined;
 
+  // A builtin preset is owned by the shipped definition and the server
+  // refuses updates; callers never offer it, and a stray one gets no editor
+  // rather than a Save button that could only fail.
+  if (editing?.builtin) return null;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">

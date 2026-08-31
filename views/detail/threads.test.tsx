@@ -238,3 +238,69 @@ describe("task detail pull request pills", () => {
     });
   });
 });
+
+describe("dispatch preset default", () => {
+  const builtinPreset = {
+    id: "01HZZZZZZZZZZZZZZZZZZZZZP9",
+    name: "implement",
+    providerId: "claude-code",
+    modelId: "claude-opus-5[1m]",
+    reasoningLevel: "medium",
+    serviceTier: null,
+    permissionMode: "full",
+    environmentKind: "new-worktree",
+    baseBranch: null,
+    machineId: null,
+    instructions: "",
+    builtin: true,
+    createdAt: "2026-07-15T00:00:00.000Z",
+  };
+  const customPreset = {
+    ...builtinPreset,
+    id: "01HZZZZZZZZZZZZZZZZZZZZZP1",
+    // Sorts before "implement", so alphabetical order alone would win here.
+    name: "Alpha",
+    builtin: false,
+  };
+
+  function renderDispatch() {
+    return renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          listPresets: () => ({ presets: [customPreset, builtinPreset] }),
+        }),
+      },
+    );
+  }
+
+  afterEach(() => window.localStorage.clear());
+
+  it("defaults to the preset that ships with the plugin", async () => {
+    window.localStorage.clear();
+    const slot = renderDispatch();
+    expect(
+      (await slot.findAllByRole("button", { name: "implement" })).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps a remembered choice over the builtin", async () => {
+    window.localStorage.setItem(
+      "bb-tasks:last-dispatch-preset",
+      customPreset.id,
+    );
+    const slot = renderDispatch();
+    expect(
+      (await slot.findAllByRole("button", { name: "Alpha" })).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("falls back to the builtin when the remembered preset is gone", async () => {
+    window.localStorage.setItem("bb-tasks:last-dispatch-preset", "gone");
+    const slot = renderDispatch();
+    expect(
+      (await slot.findAllByRole("button", { name: "implement" })).length,
+    ).toBeGreaterThan(0);
+  });
+});

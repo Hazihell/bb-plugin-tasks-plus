@@ -743,6 +743,29 @@ describe("PresetDialog environment section", () => {
     expect(slot.queryByLabelText("Machine")).toBeNull();
   });
 
+  it("offers neither edit nor delete on a preset that ships with the plugin", async () => {
+    const slot = renderManagePresets([
+      presetRow({ name: "implement", builtin: true }),
+      presetRow({ id: "01HZZZZZZZZZZZZZZZZZZZZZE2", name: "Custom" }),
+    ]);
+    fireEvent.mouseDown(await slot.findByRole("tab", { name: "Presets" }));
+    await slot.findByText("implement");
+    expect(slot.getByText("ships with the plugin")).toBeDefined();
+    expect(
+      slot.queryByRole("button", { name: "Edit preset implement" }),
+    ).toBeNull();
+    expect(
+      slot.queryByRole("button", { name: "Delete preset implement" }),
+    ).toBeNull();
+    // A custom preset in the same table keeps both actions.
+    expect(
+      slot.getByRole("button", { name: "Edit preset Custom" }),
+    ).toBeDefined();
+    expect(
+      slot.getByRole("button", { name: "Delete preset Custom" }),
+    ).toBeDefined();
+  });
+
   it("saves the host picker's provider, model, reasoning, and tier together", async () => {
     const updates: Array<Record<string, unknown>> = [];
     const slot = renderManagePresets([presetRow()], {

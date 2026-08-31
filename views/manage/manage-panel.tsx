@@ -333,6 +333,11 @@ function PresetsSection() {
                         className="size-3.5 text-muted-foreground"
                       />
                       {preset.name}
+                      {preset.builtin ? (
+                        <span className="text-2xs text-muted-foreground">
+                          ships with the plugin
+                        </span>
+                      ) : null}
                     </span>
                   </td>
                   <td className="px-3 py-2 text-muted-foreground">
@@ -362,36 +367,41 @@ function PresetsSection() {
                     {preset.instructions === "" ? "—" : preset.instructions}
                   </td>
                   <td className="px-3 py-2">
-                    <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-6 text-muted-foreground"
-                        aria-label={`Edit preset ${preset.name}`}
-                        onClick={() =>
-                          setDialog({ key: Date.now(), editing: preset })
-                        }
-                      >
-                        <Icon name="Edit" className="size-3.5" />
-                      </Button>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-6 text-muted-foreground hover:text-destructive"
-                        aria-label={`Delete preset ${preset.name}`}
-                        onClick={() => {
-                          setError(null);
-                          rpc
-                            .call("deletePreset", { presetId: preset.id })
-                            .then(() => presets.refresh())
-                            .catch((deleteError: unknown) =>
-                              setError(describeError(deleteError)),
-                            );
-                        }}
-                      >
-                        <Icon name="Trash2" className="size-3.5" />
-                      </Button>
-                    </span>
+                    {/* A builtin preset is refreshed from the shipped
+                        definition and the server refuses both mutations —
+                        the row offers neither. */}
+                    {preset.builtin ? null : (
+                      <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-6 text-muted-foreground"
+                          aria-label={`Edit preset ${preset.name}`}
+                          onClick={() =>
+                            setDialog({ key: Date.now(), editing: preset })
+                          }
+                        >
+                          <Icon name="Edit" className="size-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-6 text-muted-foreground hover:text-destructive"
+                          aria-label={`Delete preset ${preset.name}`}
+                          onClick={() => {
+                            setError(null);
+                            rpc
+                              .call("deletePreset", { presetId: preset.id })
+                              .then(() => presets.refresh())
+                              .catch((deleteError: unknown) =>
+                                setError(describeError(deleteError)),
+                              );
+                          }}
+                        >
+                          <Icon name="Trash2" className="size-3.5" />
+                        </Button>
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
