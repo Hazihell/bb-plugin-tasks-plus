@@ -81,10 +81,11 @@ The plugin ships the skills under `skills/`:
   approved at one gate and published as two separately fetchable documents on
   the same task: the spec as the description, the design as an
   `approved-plan.md` attachment.
-- `review-record` — wraps `/code-review` and persists its aggregate as a
-  `review_result` artifact on the originating task, with one comment pointing at
-  it. The review itself is untouched; the skill only pins what was reviewed and
-  records the outcome.
+- `review-record` — reviews the changes since a fixed point along two parallel
+  axes, Standards and Spec, and persists the aggregate as a `review_result`
+  artifact on the originating task, with one comment pointing at it. The task is
+  both the spec the Spec axis is briefed from and the record's destination, so
+  one lookup fixes what is judged and where the result lands.
 
 `to-spec-and-design` is a fork of Matt Pocock's `to-spec`, extended with a
 system-design phase, and renamed so it sits beside the original rather than
