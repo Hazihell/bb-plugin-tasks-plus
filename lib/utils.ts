@@ -22,3 +22,13 @@ export function formatHomePathForDisplay(pathValue: string): string {
     ? pathValue
     : `~${pathValue.slice(homePrefix.length)}`;
 }
+
+/**
+ * Read a text field whose blank value means "unset". Trims, then folds the
+ * empty result to null so "no value" keeps a single spelling across the
+ * dialogs and the rail that write these fields.
+ */
+export function trimToNull(value: string): string | null {
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}

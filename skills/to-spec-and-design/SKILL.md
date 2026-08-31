@@ -37,7 +37,7 @@ Give each slice its **blocking edges**: the slices that must complete before it 
 
 5. Write the spec, the design and the breakdown, and put all three to the user at **one gate**. The breakdown is a numbered list giving each slice its **title**, what it **delivers** end to end, and what **blocks** it.
 
-Ask whether the granularity is right, whether each edge genuinely gates its slice, and whether any slices should merge or split. Ask too which **base branch** the work builds on when it is not the repository default — a campaign branch, a long-lived integration branch — because a dispatch spawns its worktree from the resolved branch, and an unset one silently means the default. Publish only once the user approves the three together, revising and asking again after each change.
+Ask whether the granularity is right, whether each edge genuinely gates its slice, and whether any slices should merge or split. Ask too which **base branch** the graph builds on — always, naming the repository default so the user confirms it rather than it being assumed, and offering a campaign or long-lived integration branch as the alternative — because a dispatch spawns its worktree from the resolved branch, and an unset one silently means the default. Publish only once the user approves the three together, revising and asking again after each change.
 
 6. Publish. The spec is the task description; the design attaches to the same task, separately addressable, so a later integration review can fetch the direction alone and diff the built architecture against it.
 

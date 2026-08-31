@@ -42,6 +42,7 @@ import {
   type BbProjectLinkState,
 } from "./bb-project-link.js";
 import { folderPathName } from "./project-dialog.js";
+import { trimToNull } from "@/lib/utils";
 
 const NO_FOLDER = "__none__";
 const NEW_FOLDER = "__new__";
@@ -147,7 +148,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
         color,
         folderId,
         linkedBbProjectId: linkedTrimmed === "" ? null : linkedTrimmed,
-        baseBranch: baseBranch.trim() === "" ? null : baseBranch.trim(),
+        baseBranch: trimToNull(baseBranch),
       });
       onOpenChange(false);
       // No explicit view: the shell opens the view this client last used.
@@ -286,7 +287,7 @@ export function NewProjectDialog({ open, onOpenChange }: NewProjectDialogProps) 
           </Field>
           <Field
             label="Base branch"
-            hint="Tasks without their own branch start here. Leave empty to fall through to the preset."
+            hint="The fallback once neither the task nor an ancestor names a branch. Leave empty to fall through to the preset."
           >
             <Input
               value={baseBranch}

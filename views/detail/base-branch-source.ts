@@ -1,78 +1,23 @@
 /**
- * Where a dispatch's base branch comes from, for display only.
+ * How a resolved base branch reads in the rail.
  *
- * This mirrors the dispatch-side resolver's order — the task, then its nearest
- * ancestor that names one, then the project, then the preset — over the shapes
- * the rail already has. The resolver itself stays server-side; this names the
- * winning scope so the rail can say more than the branch.
+ * The precedence itself lives in shared/base-branch.ts, which both the
+ * dispatch and this view resolve through; all that is left here is putting
+ * the winning scope into words.
  */
 
-export type BaseBranchOrigin =
-  | "task"
-  | "ancestor"
-  | "project"
-  | "preset"
-  | "default";
+import type { BaseBranchResolution } from "../../shared/base-branch.js";
 
-export interface BaseBranchReadout {
-  /** The branch a dispatch would use; null means bb picks its default. */
-  branch: string | null;
-  origin: BaseBranchOrigin;
-  /** Key of the ancestor that supplied it, when the origin is an ancestor. */
-  ancestorKey: string | null;
-}
-
-export interface BaseBranchScopes {
-  task: { baseBranch: string | null };
-  /** Ancestors nearest first; a partial chain simply resolves further out. */
-  ancestors: readonly { key: string; baseBranch: string | null }[];
-  project: { baseBranch: string | null } | undefined;
-  preset: { name: string; baseBranch: string | null } | undefined;
-}
-
-export function readBaseBranch(scopes: BaseBranchScopes): BaseBranchReadout {
-  if (scopes.task.baseBranch !== null) {
-    return {
-      branch: scopes.task.baseBranch,
-      origin: "task",
-      ancestorKey: null,
-    };
-  }
-  const ancestor = scopes.ancestors.find((entry) => entry.baseBranch !== null);
-  if (ancestor) {
-    return {
-      branch: ancestor.baseBranch,
-      origin: "ancestor",
-      ancestorKey: ancestor.key,
-    };
-  }
-  if (scopes.project?.baseBranch != null) {
-    return {
-      branch: scopes.project.baseBranch,
-      origin: "project",
-      ancestorKey: null,
-    };
-  }
-  if (scopes.preset?.baseBranch != null) {
-    return {
-      branch: scopes.preset.baseBranch,
-      origin: "preset",
-      ancestorKey: null,
-    };
-  }
-  return { branch: null, origin: "default", ancestorKey: null };
-}
-
-/** Short attribution shown beside an inherited branch. */
+/** Short attribution shown beside the branch, naming the scope that set it. */
 export function describeBaseBranchOrigin(
-  readout: BaseBranchReadout,
+  resolution: BaseBranchResolution,
   presetName: string | undefined,
 ): string | null {
-  switch (readout.origin) {
+  switch (resolution.scope) {
     case "task":
-      return null;
+      return "from this task";
     case "ancestor":
-      return `from ${readout.ancestorKey}`;
+      return `from ${resolution.ancestorKey}`;
     case "project":
       return "from the project";
     case "preset":

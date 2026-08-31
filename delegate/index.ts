@@ -24,7 +24,7 @@ import {
   type ManifestArtifact,
 } from "../shared/artifact-manifest";
 import { delegationRpcContract } from "./contract";
-import { resolveBaseBranch } from "./base-branch";
+import { resolveBaseBranch } from "../shared/base-branch";
 
 const MAX_DELEGATED_THREAD_TITLE_LENGTH = 120;
 const SYSTEM_AUTHOR_NAME = "Tasks";
@@ -351,7 +351,7 @@ export function handlers(
 
       // The branch is resolved once and used for both the spawn and its
       // error message, so a failure names the branch actually attempted.
-      const baseBranch = resolveBaseBranch({
+      const { branch: baseBranch } = await resolveBaseBranch({
         task,
         project,
         preset,

@@ -28,11 +28,11 @@ import {
 } from "../list/lib.js";
 import { DispatchControl } from "./threads.js";
 import { defaultDispatchPreset, useLastPresetId } from "./last-preset.js";
+import { describeBaseBranchOrigin } from "./base-branch-source.js";
 import {
-  describeBaseBranchOrigin,
-  readBaseBranch,
-  type BaseBranchReadout,
-} from "./base-branch-source.js";
+  resolveBaseBranch,
+  type BaseBranchResolution,
+} from "../../shared/base-branch.js";
 import { DEFAULT_COLOR } from "../manage/shared.js";
 import {
   BbProjectLinkPicker,
@@ -64,7 +64,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Icon } from "@/components/ui/icon";
-import { cn } from "@/lib/utils";
+import { cn, trimToNull } from "@/lib/utils";
 
 export interface TaskPropertyUpdate {
   status?: TaskStatus;
@@ -482,16 +482,18 @@ function BaseBranchMenu({
   triggerClassName,
 }: {
   task: Task;
-  readout: BaseBranchReadout;
+  /** Undefined until the ancestry walk behind the resolution has answered. */
+  readout: BaseBranchResolution | undefined;
   /** What the task would fall back to if it named no branch of its own. */
-  inherited: BaseBranchReadout;
+  inherited: BaseBranchResolution | undefined;
   presetName: string | undefined;
   onUpdate: (update: TaskPropertyUpdate) => void;
   triggerClassName: string;
 }) {
   const [open, setOpen] = useState(false);
   const [branch, setBranch] = useState("");
-  const attribution = describeBaseBranchOrigin(readout, presetName);
+  const attribution =
+    readout === undefined ? null : describeBaseBranchOrigin(readout, presetName);
   const save = (next: string | null) => {
     onUpdate({ baseBranch: next });
     setOpen(false);
@@ -511,13 +513,15 @@ function BaseBranchMenu({
           className={triggerClassName}
         >
           <Icon name="GitBranch" className="size-3.5 shrink-0" />
-          {readout.branch === null ? (
+          {readout === undefined ? (
+            <span className="truncate text-muted-foreground">…</span>
+          ) : readout.branch === null ? (
             <span className="truncate text-muted-foreground">bb default</span>
           ) : (
             <span
               className={cn(
                 "min-w-0 truncate",
-                readout.origin === "task" ? undefined : "text-muted-foreground",
+                readout.scope === "task" ? undefined : "text-muted-foreground",
               )}
               title={
                 attribution === null
@@ -545,14 +549,16 @@ function BaseBranchMenu({
           onKeyDown={(event) => {
             if (event.key !== "Enter") return;
             event.preventDefault();
-            save(branch.trim() === "" ? null : branch.trim());
+            save(trimToNull(branch));
           }}
           className="h-8"
         />
         <p className="mt-1.5 text-2xs text-muted-foreground">
-          {inherited.branch === null
-            ? "Inheriting lands on bb's default branch."
-            : `Inheriting lands on ${inherited.branch} — ${describeBaseBranchOrigin(inherited, presetName)}.`}
+          {inherited === undefined
+            ? "Resolving where inheriting lands…"
+            : inherited.branch === null
+              ? "Inheriting lands on bb's default branch."
+              : `Inheriting lands on ${inherited.branch} — ${describeBaseBranchOrigin(inherited, presetName)}.`}
         </p>
         <div className="mt-2.5 flex items-center justify-between gap-2">
           {task.baseBranch !== null ? (
@@ -571,7 +577,7 @@ function BaseBranchMenu({
           <Button
             size="sm"
             className="h-7"
-            onClick={() => save(branch.trim() === "" ? null : branch.trim())}
+            onClick={() => save(trimToNull(branch))}
           >
             Save
           </Button>
@@ -609,42 +615,41 @@ export function PropertiesRail({
     async (query) => (await query.call("listBbProjects")).bbProjects,
     ["projects:changed"],
   );
-  // The base-branch read-out has to name the ancestor that supplied a branch,
-  // so it walks the chain the dispatch resolver walks. The walk stops on a
-  // repeated id, matching the resolver's tolerance of a cyclic parent link.
-  const ancestors = useTasksQuery(
-    async (query) => {
-      const chain: { key: string; baseBranch: string | null }[] = [];
-      const seen = new Set<string>([task.id]);
-      let nextId = task.parentTaskId;
-      while (nextId !== null && !seen.has(nextId)) {
-        seen.add(nextId);
-        const { task: ancestor } = await query.call("getTask", {
-          taskId: nextId,
-        });
-        if (ancestor === null) break;
-        chain.push({ key: ancestor.key, baseBranch: ancestor.baseBranch });
-        nextId = ancestor.parentTaskId;
-      }
-      return chain;
-    },
-    ["tasks:changed"],
-    [task.id, task.parentTaskId],
-  );
   // Which preset supplies the fallback depends on which one a dispatch would
   // use, so the read-out reads the same remembered choice the button does.
   const lastPresetId = useLastPresetId();
   const dispatchPreset = defaultDispatchPreset(presets, lastPresetId);
-  const scopes = {
-    ancestors: ancestors.data ?? [],
-    project,
-    preset: dispatchPreset,
-  };
-  const baseBranch = readBaseBranch({ ...scopes, task });
-  const inheritedBaseBranch = readBaseBranch({
-    ...scopes,
-    task: { baseBranch: null },
-  });
+  // The read-out resolves through the dispatch's own resolver, over an
+  // ancestor lookup backed by RPC. Each id is fetched once, so resolving the
+  // task's answer and its inherited fallback costs one walk between them.
+  const baseBranch = useTasksQuery(
+    async (query) => {
+      const fetched = new Map<string, Task | null>();
+      const getTask = async (taskId: string) => {
+        const cached = fetched.get(taskId);
+        if (cached !== undefined) return cached;
+        const { task: ancestor } = await query.call("getTask", { taskId });
+        fetched.set(taskId, ancestor);
+        return ancestor;
+      };
+      const scopes = { project, preset: dispatchPreset, getTask };
+      return {
+        resolved: await resolveBaseBranch({ ...scopes, task }),
+        inherited: await resolveBaseBranch({
+          ...scopes,
+          task: { ...task, baseBranch: null },
+        }),
+      };
+    },
+    ["tasks:changed"],
+    [
+      task.id,
+      task.parentTaskId,
+      task.baseBranch,
+      project?.baseBranch,
+      dispatchPreset?.baseBranch,
+    ],
+  );
   return (
     <aside className={cn("w-56 shrink-0 py-10 pl-2 pr-6", className)}>
       <h2 className="mb-1.5 text-xs font-semibold text-muted-foreground">
@@ -707,8 +712,8 @@ export function PropertiesRail({
       </div>
       <BaseBranchMenu
         task={task}
-        readout={baseBranch}
-        inherited={inheritedBaseBranch}
+        readout={baseBranch.data?.resolved}
+        inherited={baseBranch.data?.inherited}
         presetName={dispatchPreset?.name}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}

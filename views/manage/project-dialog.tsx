@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ColorSwatchPicker, Field } from "./shared.js";
+import { trimToNull } from "@/lib/utils";
 import {
   BbProjectLinkPicker,
   bbProjectLinkStateFor,
@@ -74,14 +75,13 @@ export async function saveProjectDraft(
   draft: ProjectDraft,
 ): Promise<void> {
   const linked = resolveBbProjectLink(draft.link);
-  const baseBranch = draft.baseBranch.trim();
   await rpc.call("updateProject", {
     projectId: project.id,
     name: draft.name.trim(),
     color: draft.color,
     folderId: draft.folderId,
     linkedBbProjectId: linked === "" ? null : linked,
-    baseBranch: baseBranch === "" ? null : baseBranch,
+    baseBranch: trimToNull(draft.baseBranch),
   });
 }
 
@@ -193,7 +193,7 @@ export function ProjectDialog({
           </Field>
           <Field
             label="Base branch"
-            hint="Tasks without their own branch start here. Leave empty to fall through to the preset."
+            hint="The fallback once neither the task nor an ancestor names a branch. Leave empty to fall through to the preset."
           >
             <Input
               value={draft.baseBranch}

@@ -91,7 +91,7 @@ export const PRESET_PERMISSION_MODES = [
 export const presetPermissionModeSchema = z.enum(PRESET_PERMISSION_MODES);
 export type PresetPermissionMode = z.infer<typeof presetPermissionModeSchema>;
 const presetEnvironmentKindSchema = z.enum(PRESET_ENVIRONMENT_KINDS);
-const nullablePresetTargetSchema = nonBlankStringSchema.nullable();
+const nullableNonBlankSchema = nonBlankStringSchema.nullable();
 const projectPrefixSchema = z
   .string()
   .regex(
@@ -137,7 +137,7 @@ const projectSchema = z
     color: z.string(),
     folderId: idSchema.nullable(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable(),
-    baseBranch: nullablePresetTargetSchema,
+    baseBranch: nullableNonBlankSchema,
     createdAt: z.string(),
   })
   .strict();
@@ -154,7 +154,7 @@ const taskSchema = z
     priority: taskPrioritySchema,
     dueDate: calendarDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
-    baseBranch: nullablePresetTargetSchema,
+    baseBranch: nullableNonBlankSchema,
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -448,8 +448,8 @@ const presetSchema = z
     serviceTier: presetServiceTierSchema.nullable(),
     permissionMode: presetPermissionModeSchema,
     environmentKind: presetEnvironmentKindSchema,
-    baseBranch: nullablePresetTargetSchema,
-    machineId: nullablePresetTargetSchema,
+    baseBranch: nullableNonBlankSchema,
+    machineId: nullableNonBlankSchema,
     instructions: z.string(),
     builtin: z.boolean(),
     createdAt: z.string(),
@@ -552,7 +552,7 @@ const updateTaskInputSchema = z
     priority: taskPrioritySchema.optional(),
     dueDate: calendarDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
-    baseBranch: nullablePresetTargetSchema.optional(),
+    baseBranch: nullableNonBlankSchema.optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
@@ -577,7 +577,7 @@ const updateProjectInputSchema = z
     color: nonBlankStringSchema.optional(),
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable().optional(),
-    baseBranch: nullablePresetTargetSchema.optional(),
+    baseBranch: nullableNonBlankSchema.optional(),
   })
   .strict()
   .refine(
@@ -611,8 +611,8 @@ const updatePresetInputSchema = z
     serviceTier: presetServiceTierSchema.nullable().optional(),
     permissionMode: presetPermissionModeSchema.optional(),
     environmentKind: presetEnvironmentKindSchema.optional(),
-    baseBranch: nullablePresetTargetSchema.optional(),
-    machineId: nullablePresetTargetSchema.optional(),
+    baseBranch: nullableNonBlankSchema.optional(),
+    machineId: nullableNonBlankSchema.optional(),
     instructions: z.string().optional(),
   })
   .strict()
@@ -705,7 +705,7 @@ export const tasksRpcContract = defineRpcContract({
           .startsWith("proj_")
           .nullable()
           .default(null),
-        baseBranch: nullablePresetTargetSchema.default(null),
+        baseBranch: nullableNonBlankSchema.default(null),
       })
       .strict(),
     output: z.object({ project: projectSchema }).strict(),
@@ -740,7 +740,7 @@ export const tasksRpcContract = defineRpcContract({
         priority: taskPrioritySchema.default("none"),
         dueDate: calendarDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
-        baseBranch: nullablePresetTargetSchema.default(null),
+        baseBranch: nullableNonBlankSchema.default(null),
         labelIds: taskLabelsSchema.default([]),
       })
       .strict(),
@@ -939,8 +939,8 @@ export const tasksRpcContract = defineRpcContract({
         serviceTier: presetServiceTierSchema.nullable().default(null),
         permissionMode: presetPermissionModeSchema,
         environmentKind: presetEnvironmentKindSchema.default("project-default"),
-        baseBranch: nullablePresetTargetSchema.default(null),
-        machineId: nullablePresetTargetSchema.default(null),
+        baseBranch: nullableNonBlankSchema.default(null),
+        machineId: nullableNonBlankSchema.default(null),
         instructions: z.string().default(""),
       })
       .strict()

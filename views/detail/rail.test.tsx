@@ -212,6 +212,31 @@ describe("task base branch rail control", () => {
     await waitFor(() => expect(updateCalls).toHaveLength(2));
     expect(updateCalls[1]).toMatchObject({ baseBranch: null });
   });
+  it("attributes the task's own branch to the task", async () => {
+    const owned = { ...task, baseBranch: "feature/own" };
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc(BB_PROJECT_ID, {
+          // Broader scopes name branches too; the task's own still wins, and
+          // the read-out has to say so rather than show a bare name.
+          listProjects: () => ({
+            projects: [projectRow(BB_PROJECT_ID, "release-redesign")],
+          }),
+          getTaskByKey: () => ({ task: owned }),
+          listTasks: (input: { parentTaskId?: string } | null) =>
+            input?.parentTaskId ? { tasks: [] } : { tasks: [owned] },
+        }),
+      },
+    );
+    const trigger = await slot.findByRole("button", {
+      name: /Edit base branch/,
+    });
+    await waitFor(() => expect(trigger.textContent).toContain("feature/own"));
+    expect(trigger.textContent).toContain("from this task");
+  });
+
   it("reads the project's branch, and says the branch came from the project", async () => {
     const slot = renderSlot(
       app.navPanels[0]!,

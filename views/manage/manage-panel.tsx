@@ -289,7 +289,6 @@ function ProjectsSection() {
     key: number;
     project: Project;
   } | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const projectList = projects.data ?? [];
   const folderList = folders.data ?? [];
   const bbProjectList = bbProjects.data ?? [];
@@ -361,10 +360,7 @@ function ProjectsSection() {
                       variant="ghost"
                       className="size-6 text-muted-foreground"
                       aria-label={`Edit project ${project.name}`}
-                      onClick={() => {
-                        setError(null);
-                        setDialog({ key: Date.now(), project });
-                      }}
+                      onClick={() => setDialog({ key: Date.now(), project })}
                     >
                       <Icon name="Edit" className="size-3.5" />
                     </Button>
@@ -385,11 +381,6 @@ function ProjectsSection() {
           </tbody>
         </table>
       </div>
-      {error ? (
-        <p role="alert" className="text-xs text-destructive">
-          {error}
-        </p>
-      ) : null}
       {dialog ? (
         <ProjectDialog
           key={dialog.key}
@@ -859,7 +850,7 @@ export function ManagePanel({ className }: { className?: string }) {
           Projects, labels, agent presets, and folders.
         </p>
       </header>
-      <Tabs defaultValue="projects">
+      <Tabs defaultValue="labels">
         <TabsList>
           <TabsTrigger value="projects">Projects</TabsTrigger>
           <TabsTrigger value="labels">Labels</TabsTrigger>
