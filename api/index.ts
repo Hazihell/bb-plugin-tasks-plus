@@ -1,8 +1,10 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import {
   createTasksStore,
+  TaskArtifactAttachmentMismatchError,
   TaskBlockerCycleError,
   type Attachment as StoredAttachment,
+  type TaskArtifact as StoredTaskArtifact,
   type Comment as StoredComment,
   type Task as StoredTask,
   type TasksStore,
@@ -16,11 +18,13 @@ import { deliverCommentToLatestAgent } from "../steer";
 import { isSideChatShapedThread } from "../shared/side-chat";
 import { isBlockerResolved } from "../shared/blockers";
 import {
+  taskArtifactSchema,
   tasksRpcContract,
   type Attachment as AttachmentMetadata,
   type ProjectsChangedEvent,
   type SidebarProjectSummary,
   type Task,
+  type TaskArtifact as ApiTaskArtifact,
   type TaskPullRequest,
   type TasksChangedEvent,
   type TasksDomainError,
@@ -181,6 +185,17 @@ function statusName(status: TaskStatus): string {
 
 function priorityName(priority: StoredTask["priority"]): string {
   return priority[0]?.toUpperCase() + priority.slice(1);
+}
+
+/**
+ * The stored artifact and the contract artifact have identical fields; the
+ * difference is that storage types metadata as any JSON object while the
+ * contract types it per kind. Parsing rather than asserting is what makes the
+ * boundary's promise real: a row whose metadata no longer matches its kind
+ * fails loudly here instead of reaching a caller as the wrong shape.
+ */
+function apiArtifact(artifact: StoredTaskArtifact): ApiTaskArtifact {
+  return taskArtifactSchema.parse(artifact);
 }
 
 export function publishTasksChanged(
@@ -1126,6 +1141,41 @@ export function registerHandlers(
         }
         throw error;
       }
+    },
+    createArtifact(input) {
+      const task = store.tasks.getTask(input.taskId);
+      try {
+        const artifact = store.tasks.createTaskArtifact(input);
+        if (task) publishTasksChanged(bb, task.id, task.projectId);
+        return { ok: true, artifact: apiArtifact(artifact) };
+      } catch (error) {
+        if (error instanceof TaskArtifactAttachmentMismatchError) {
+          return {
+            ok: false,
+            error: {
+              code: "artifact_attachment_mismatch",
+              message: error.message,
+            },
+          };
+        }
+        throw error;
+      }
+    },
+    listArtifacts(input) {
+      const artifacts = store.tasks.listTaskArtifacts(
+        input.taskId,
+        input.kinds ? { kinds: input.kinds } : {},
+      );
+      return { artifacts: artifacts.map(apiArtifact) };
+    },
+    deleteArtifact(input) {
+      const artifact = store.tasks.getTaskArtifact(input.artifactId);
+      const deleted = store.tasks.deleteTaskArtifact(input.artifactId);
+      if (deleted && artifact) {
+        const task = store.tasks.getTask(artifact.taskId);
+        if (task) publishTasksChanged(bb, task.id, task.projectId);
+      }
+      return { deleted };
     },
     listTaskThreads(input) {
       return { taskThreads: store.tasks.listTaskThreads(input.taskId) };

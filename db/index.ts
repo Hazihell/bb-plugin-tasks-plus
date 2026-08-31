@@ -1,6 +1,7 @@
 export {
   createTasksStore,
   escapeLike,
+  TaskArtifactAttachmentMismatchError,
   TaskBlockerCycleError,
   TasksPageCursorError,
   type TasksStore,

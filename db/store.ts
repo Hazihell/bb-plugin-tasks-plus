@@ -79,6 +79,18 @@ export class TaskBlockerCycleError extends Error {
   }
 }
 
+/**
+ * An artifact may only cite an attachment of its own task. Thrown as a named
+ * class so the API layer can translate it into a domain outcome without
+ * matching on the message.
+ */
+export class TaskArtifactAttachmentMismatchError extends Error {
+  constructor() {
+    super("A task artifact attachment must belong to the same task");
+    this.name = "TaskArtifactAttachmentMismatchError";
+  }
+}
+
 interface FolderRow {
   id: string;
   name: string;
@@ -1862,9 +1874,7 @@ export function createTasksStore(db: PluginDatabase) {
       if (attachmentId !== null) {
         const attachment = requireAttachment(attachmentId);
         if (!attachmentBelongsToTask(attachment, input.taskId)) {
-          throw new Error(
-            "A task artifact attachment must belong to the same task",
-          );
+          throw new TaskArtifactAttachmentMismatchError();
         }
       }
       db.prepare<
