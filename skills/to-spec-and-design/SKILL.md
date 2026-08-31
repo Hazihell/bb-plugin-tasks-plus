@@ -45,27 +45,37 @@ One gate covers the set: behaviour, technical direction and the shape of the tas
 
 6. Publish. The spec is the parent task's description; the design attaches to that same task, separately addressable, so a later integration review can fetch the direction alone and diff the built architecture against it.
 
+Where the feature is one slice, there is no umbrella. Publish it as a single task, exactly as before, and stop here:
+
 ```sh
-KEY=$(bb tasks-plus create --title <title> --description-file <spec-path> --json | jq -r '.task.key')
-bb tasks-plus attachment add "$KEY" --file <design-path> --name approved-plan.md
+KEY=$(bb tasks-plus create --title "$TITLE" --description-file "$SPEC" \
+  --label ready-for-agent --json | jq -r '.task.key')
+bb tasks-plus attachment add "$KEY" --file "$DESIGN" --name approved-plan.md
 ```
 
-Then create one child per slice, in dependency order — blockers before dependents — writing each description from the `<slice-template>` below. Capture every key, because the edges need them:
+Otherwise create the parent first. It carries no triage label: the umbrella is not a unit of work, and `ready-for-agent` is the signal that an agent may pick something up.
 
 ```sh
-SLICE_1=$(bb tasks-plus create --title <slice-title> --description-file <slice-path> \
+KEY=$(bb tasks-plus create --title "$TITLE" --description-file "$SPEC" --json | jq -r '.task.key')
+bb tasks-plus attachment add "$KEY" --file "$DESIGN" --name approved-plan.md
+```
+
+Then create one child per slice, in dependency order — blockers before dependents — writing each description from the `<slice-template>` below. Capture every key as you go, because the edges are recorded by key:
+
+```sh
+SLICE_1=$(bb tasks-plus create --title "$SLICE_1_TITLE" --description-file "$SLICE_1_BODY" \
+  --label ready-for-agent --parent "$KEY" --json | jq -r '.task.key')
+SLICE_2=$(bb tasks-plus create --title "$SLICE_2_TITLE" --description-file "$SLICE_2_BODY" \
   --label ready-for-agent --parent "$KEY" --json | jq -r '.task.key')
 ```
 
-Finally record each blocking edge as a relation:
+Finally record each blocking edge as a relation, once both of its ends exist:
 
 ```sh
 bb tasks-plus blocker add "$SLICE_2" "$SLICE_1"   # slice 2 is blocked by slice 1
 ```
 
-`ready-for-agent` marks the work an agent may pick up, so it goes on the children. The parent is the umbrella and carries no triage label; no agent should take it as a unit of work.
-
-Where the feature is one slice, there is no umbrella: publish the single task with the spec as its description, the design attached, and `ready-for-agent` on it. No further triage is needed.
+No further triage is needed.
 
 <spec-template>
 

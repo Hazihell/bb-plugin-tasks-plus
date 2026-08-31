@@ -104,11 +104,9 @@ describe("the to-spec-and-design publish sequence", () => {
     command.includes("blocker add"),
   );
 
-  it("documents creating a child under a parent", () => {
+  it("documents creating a task, a child under it, and an edge", () => {
+    expect(parentCreate).toBeGreaterThanOrEqual(0);
     expect(childCreate).toBeGreaterThanOrEqual(0);
-  });
-
-  it("documents joining slices with a real blocker edge", () => {
     expect(blockerAdd).toBeGreaterThanOrEqual(0);
   });
 
@@ -120,20 +118,58 @@ describe("the to-spec-and-design publish sequence", () => {
   it("attaches the design to the task it created", () => {
     expect(source).toMatch(/attachment add .*--name approved-plan\.md/);
   });
+
+  /**
+   * A blocker edge names both of its ends by key, and those keys only exist
+   * because an earlier create captured them. A doc that names an end it never
+   * captured describes a sequence that cannot run. Titles and file paths are
+   * the agent's own inputs, so only captured keys are held to this.
+   */
+  it("names blocker ends that an earlier command captured", () => {
+    const script = [...joined.matchAll(/```sh\n([\s\S]*?)```/g)]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+    const captured = new Set<string>();
+    const ends: string[] = [];
+    for (const line of script.split("\n")) {
+      if (line.includes("blocker add")) {
+        for (const [, name] of line.matchAll(/"\$(\w+)"/g)) {
+          ends.push(name ?? "");
+          expect(captured, `${name} is used before it is captured`).toContain(
+            name,
+          );
+        }
+      }
+      const capture = /^\s*(\w+)=\$\(bb tasks-plus/.exec(line);
+      if (capture?.[1] !== undefined) captured.add(capture[1]);
+    }
+    expect(ends.length).toBe(2);
+  });
+
+  /** The single-slice path is the behaviour this change promised not to move. */
+  it("still labels a lone task ready-for-agent", () => {
+    expect(commands[parentCreate]).toContain("--label ready-for-agent");
+  });
 });
 
 /**
  * Every command a skill hands an agent has to be one the CLI answers to.
- * Reading the verbs off the CLI's own registration keeps the examples
- * non-fictional and fails loudly if a command is ever renamed.
+ * Reading the verbs off the CLI's own usage strings keeps the examples
+ * non-fictional and fails loudly if a command is ever renamed. Grouped
+ * commands are checked to their subcommand, so `blocker nonsense` fails.
  */
 describe("commands the skills tell agents to run", () => {
   const cli = readFileSync(join(skillsDir, "..", "cli", "index.ts"), "utf8");
 
+  const isGroup = (verb: string) =>
+    new RegExp(`bb tasks-plus ${verb} [a-z]`).test(cli);
+
   const documented = skillNames.flatMap((name) =>
-    [...readSkill(name).matchAll(/\bbb tasks-plus ([a-z-]+)/g)].map(
-      (match) => match[1] ?? "",
-    ),
+    [...readSkill(name).matchAll(/\bbb tasks-plus ([a-z-]+)(?: ([a-z-]+))?/g)]
+      .map(([, verb = "", sub = ""]) =>
+        isGroup(verb) && sub !== "" ? `${verb} ${sub}` : verb,
+      )
+      .filter((command) => command !== ""),
   );
 
   it.each([...new Set(documented)].sort())(
