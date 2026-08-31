@@ -30,7 +30,6 @@ import {
   savePresetDraft,
   type PresetDraft,
 } from "./preset-dialog.js";
-import { PresetViewDialog } from "./preset-view-dialog.js";
 import { ColorSwatchPicker, DEFAULT_COLOR } from "./shared.js";
 
 // ---------------------------------------------------------------------------
@@ -283,7 +282,6 @@ function PresetsSection() {
     key: number;
     editing: Preset | null;
   } | null>(null);
-  const [viewing, setViewing] = useState<Preset | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const save = async (editing: Preset | null, draft: PresetDraft) => {
@@ -370,34 +368,22 @@ function PresetsSection() {
                     {preset.instructions === "" ? "—" : preset.instructions}
                   </td>
                   <td className="px-3 py-2">
-                    {/* A builtin preset is refreshed from the shipped
-                        definition and the server refuses both mutations —
-                        the row offers reading it instead. */}
-                    {preset.builtin ? (
-                      <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="size-6 text-muted-foreground"
-                          aria-label={`View preset ${preset.name}`}
-                          onClick={() => setViewing(preset)}
-                        >
-                          <Icon name="Eye" className="size-3.5" />
-                        </Button>
-                      </span>
-                    ) : (
-                      <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="size-6 text-muted-foreground"
-                          aria-label={`Edit preset ${preset.name}`}
-                          onClick={() =>
-                            setDialog({ key: Date.now(), editing: preset })
-                          }
-                        >
-                          <Icon name="Edit" className="size-3.5" />
-                        </Button>
+                    <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        className="size-6 text-muted-foreground"
+                        aria-label={`Edit preset ${preset.name}`}
+                        onClick={() =>
+                          setDialog({ key: Date.now(), editing: preset })
+                        }
+                      >
+                        <Icon name="Edit" className="size-3.5" />
+                      </Button>
+                      {/* A builtin preset is reseeded from the shipped
+                          definition and the server refuses to delete it —
+                          the row leaves that action out. */}
+                      {preset.builtin ? null : (
                         <Button
                           size="icon"
                           variant="ghost"
@@ -421,8 +407,8 @@ function PresetsSection() {
                         >
                           <Icon name="Trash2" className="size-3.5" />
                         </Button>
-                      </span>
-                    )}
+                      )}
+                    </span>
                   </td>
                 </tr>
               );
@@ -454,16 +440,6 @@ function PresetsSection() {
           }}
           editing={dialog.editing}
           onSave={(draft) => save(dialog.editing, draft)}
-        />
-      ) : null}
-      {viewing ? (
-        <PresetViewDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setViewing(null);
-          }}
-          preset={viewing}
-          machines={machines.data ?? []}
         />
       ) : null}
     </div>

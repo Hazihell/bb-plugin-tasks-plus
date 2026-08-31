@@ -1135,7 +1135,7 @@ describe("tasks app shell", () => {
     expect(slot.getAllByLabelText("Spawns a new worktree")).toHaveLength(1);
   });
 
-  it("opens a builtin preset read-only and a custom one in the editor", async () => {
+  it("opens a builtin preset in the editor with its contract read-only", async () => {
     const instructions = [
       "Implement the task end to end.",
       "",
@@ -1177,24 +1177,32 @@ describe("tasks app shell", () => {
       },
     );
     const builtinRow = await slot.findByRole("button", { name: "implement" });
-    expect(builtinRow.getAttribute("title")).toBe("View preset implement");
+    expect(builtinRow.getAttribute("title")).toBe("Edit preset implement");
     fireEvent.click(builtinRow);
     const view = await slot.findByRole("dialog");
+    // Instructions read as text; the execution fields stay editable and
+    // savable.
     expect(
       [...view.querySelectorAll("p")].some(
         (node) => node.textContent === instructions,
       ),
     ).toBe(true);
-    expect(slot.queryByRole("button", { name: "Save preset" })).toBeNull();
-    fireEvent.click(slot.getByRole("button", { name: "Close" }));
+    expect(view.querySelector("textarea")).toBeNull();
+    expect(
+      view.textContent?.includes("contract text ships with the plugin"),
+    ).toBe(true);
+    expect(slot.getByLabelText("Model")).toBeDefined();
+    expect(slot.getByRole("button", { name: "Save preset" })).toBeDefined();
+    fireEvent.click(slot.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(slot.queryByRole("dialog")).toBeNull());
 
-    // A custom preset still reaches the editor.
+    // A custom preset keeps a fully editable form.
     const customRow = slot.getByRole("button", { name: "Custom" });
     expect(customRow.getAttribute("title")).toBe("Edit preset Custom");
     fireEvent.click(customRow);
     const editor = await slot.findByRole("dialog");
     expect(editor.textContent?.includes("ships with the plugin")).toBe(false);
+    expect(editor.querySelector("textarea")).toBeDefined();
     expect(slot.getByRole("button", { name: "Save preset" })).toBeDefined();
   });
 

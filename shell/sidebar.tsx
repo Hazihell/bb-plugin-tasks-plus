@@ -12,7 +12,6 @@ import {
   PresetDialog,
   savePresetDraft,
 } from "../views/manage/preset-dialog.js";
-import { PresetViewDialog } from "../views/manage/preset-view-dialog.js";
 import { Icon } from "@/components/ui/icon";
 import { DelayedLoading } from "@/components/ui/delayed-loading";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -191,9 +190,6 @@ export function TasksSidebar({
     key: number;
     editing: Preset | null;
   } | null>(null);
-  // A builtin preset has no editable draft, so it opens the read-only view
-  // instead of the editor.
-  const [viewingPreset, setViewingPreset] = useState<Preset | null>(null);
   const summaryByProject = useMemo(
     () => new Map((summaries ?? []).map((entry) => [entry.projectId, entry])),
     [summaries],
@@ -318,14 +314,9 @@ export function TasksSidebar({
                   {presets.map((preset) => (
                     <SidebarRow
                       key={preset.id}
-                      title={`${preset.builtin ? "View" : "Edit"} preset ${preset.name}`}
+                      title={`Edit preset ${preset.name}`}
                       onClick={() =>
-                        preset.builtin
-                          ? setViewingPreset(preset)
-                          : setPresetDialog({
-                              key: Date.now(),
-                              editing: preset,
-                            })
+                        setPresetDialog({ key: Date.now(), editing: preset })
                       }
                     >
                       <Icon name="Brain" className="size-3.5 shrink-0" />
@@ -389,18 +380,6 @@ export function TasksSidebar({
           }}
           editing={presetDialog.editing}
           onSave={(draft) => savePresetDraft(rpc, presetDialog.editing, draft)}
-        />
-      ) : null}
-      {viewingPreset ? (
-        // The sidebar is fed its data by the shell and holds no machine list;
-        // the view falls back to naming a machine by id.
-        <PresetViewDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setViewingPreset(null);
-          }}
-          preset={viewingPreset}
-          machines={[]}
         />
       ) : null}
     </div>
