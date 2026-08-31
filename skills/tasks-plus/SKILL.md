@@ -8,9 +8,9 @@ description: Tasks Plus is this user's issue tracker. Use when asked to work on 
 Use the `bb tasks-plus` CLI to understand the assigned task, keep its record useful,
 and report the outcome where the work is tracked.
 
-Delegation presets are user-defined; Tasks ships with none. Before dispatching
-work, use `bb tasks-plus preset list` and create a preset if the required one does
-not already exist. Dispatch requires an existing preset.
+Dispatch requires a preset. One ships with the plugin — `implement`, below — and
+is the default choice; the rest are user-defined. Use `bb tasks-plus preset list`
+and create one when the work needs a different model or permission level.
 
 Create or update the same execution selection exposed in the Tasks UI with
 `--provider`, `--model`, `--reasoning`, and optional
@@ -26,15 +26,18 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
 
 ### The implement preset
 
-A preset's `--instructions` ride on every seed prompt it dispatches, so a working
+A preset's instructions ride on every seed prompt it dispatches, so a working
 thread's lifecycle belongs in the preset, not in each task description. The
-`implement` preset carries this project's contract: one thread owns the task end
-to end — read, investigate, plan as an artifact, `/implement`, evidence and
-decisions as it goes, `/narrative-review`, PR, `in_review` — and never splits it
-into new tasks.
+shipped `implement` preset is that lifecycle: one thread owns the task end to end
+— read, investigate, plan as an artifact, build test-first, evidence and
+decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` —
+and never splits it into new tasks. It names only skills this plugin bundles, so
+it works on an install with no personal skills at all.
 
-`bb tasks-plus preset show implement` is the live text. After changing it,
-dispatch a throwaway task and read the seed prompt in the spawned thread's log.
+It is plugin-owned: seeded on first open, refreshed from the shipped text
+afterwards, and refused by both the CLI and the UI for editing or deletion. To
+work differently, create your own preset; `bb tasks-plus preset show implement`
+prints the live text.
 
 ## Work a task
 
