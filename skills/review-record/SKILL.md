@@ -1,45 +1,41 @@
 ---
 name: review-record
-description: "Run the two-axis /code-review and persist its result as a durable review_result artifact on the originating task, with one milestone comment pointing at it. Use when a review's outcome must survive the conversation — reviewing a branch or PR against a task, or when asked to 'review and record'."
+description: "Run /code-review and persist its aggregate as a `review_result` artifact on the originating task, with one comment as the index. Use when a review must outlive the thread it ran in, or when asked to review and record."
 disable-model-invocation: true
 ---
 
-This skill wraps `/code-review`; it does not replace or amend it. `/code-review`
-keeps its two axes, its prompts and its aggregation. This skill pins what was
-reviewed, invokes it verbatim, and turns the aggregate into a `review_result`
-artifact plus one comment.
+A wrapper around `/code-review`, which keeps its two axes, its prompts and its
+aggregation untouched. This skill pins what was reviewed, invokes the review
+verbatim, and turns what comes back into a durable record.
 
-Nothing flows the other way. The reviewer sub-agents are never told a task key,
-never write files, and never know they are being recorded. One writer, one
-failure point, and no cleanup to do when an axis dies.
+The seam is one-way. The reviewer sub-agents are never told a task key and never
+write anything, so there is one writer, one failure point, and nothing to clean
+up when an axis dies.
 
-Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill.
-There is no override here — a `review_result` artifact is a Tasks Plus record, so
-a repo pointing at another tracker puts this skill out of scope rather than
-redirecting it.
+Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill. A
+`review_result` is a Tasks Plus record, so a repo on another tracker puts this
+skill out of scope rather than redirecting it.
 
 ## Process
 
-### 1. Resolve the task key
+### 1. Resolve the task, and read it
 
-In order: the key given in the invocation; a task key in the branch name; a task
-key in `git log <fixed-point>..HEAD`. If none is found, ask. Never guess, and
-never write to a task the review did not come from.
+The key comes from the invocation, the branch name, or
+`git log <fixed-point>..HEAD` — in that order. If none of the three yields one,
+ask.
 
-Then read the task before writing anything to it:
+Then read the task before writing to it:
 
 ```sh
 bb tasks-plus show <KEY> --json
 ```
 
-A key that does not resolve, or resolves to a task unrelated to the commits,
-stops the skill here. Failing before the review is cheaper than discovering it
-after.
+Stop here if the key fails to resolve or names a task unrelated to the commits.
 
 ### 2. Pin identity before reviewing
 
 Capture all of this first, so the record describes the tree that was reviewed
-rather than whatever `HEAD` becomes afterwards:
+rather than whatever `HEAD` drifts to:
 
 ```sh
 git rev-parse --show-toplevel
@@ -51,42 +47,38 @@ git log <fixed-point>..HEAD --oneline
 
 ### 3. Invoke `/code-review`
 
-Pass the fixed point through, and the `codex` argument too if the user gave one.
-Do not re-plan, re-scope or re-run the review, and do not read the diff yourself.
-If `/code-review` is unavailable, stop and say so — never improvise a review in
-its place.
+Pass through the fixed point, and the `codex` argument if the user gave one.
+`/code-review` owns the review itself: your part is the fixed point in and the
+aggregate out. If it is unavailable, stop and say so.
 
 ### 4. Assemble the record
 
-Write a markdown body to a file under `$BB_THREAD_STORAGE`:
+A markdown body, written to a file under `$BB_THREAD_STORAGE`:
 
-- A header block: repo path and `origin` URL, task key, fixed point as given
-  and its resolved SHA, `HEAD` SHA, the commit list, the reviewer model (Claude
-  sub-agents or `gpt-5.6-sol` via bb threads — name it exactly as
-  `/code-review` reported it), and the timestamp.
-- `## Standards` — that axis's section, complete and verbatim.
-- `## Spec` — that axis's section, complete and verbatim.
+- A header block: repo path and `origin` URL, task key, fixed point as given and
+  its resolved SHA, `HEAD` SHA, the commit list, the reviewer model named exactly
+  as `/code-review` reported it, and the timestamp.
+- `## Standards` and `## Spec` — each axis's section, complete and verbatim.
 - `## Summary` — the per-axis summary line `/code-review` ended with.
 
-Every axis gets a section, always. Its body is one of: the findings; the exact
-line `No findings.`; or `Not run: <reason>` (no spec found, thread failed, axis
-skipped). Never omit an axis section, and never write "not run" as "no findings".
+Every axis gets a section, and its body is exactly one of: the findings; the line
+`No findings.`; or `Not run: <reason>` (no spec found, thread failed, axis
+skipped). An unrun axis says so in those words.
 
 ### 5. Verdict and counts
 
-Write a metadata file carrying exactly `verdict` and `findingCounts` — the schema
-is strict and rejects any other field.
+A metadata file carrying `verdict` and `findingCounts`, and nothing else — the
+schema is strict.
 
-`findingCounts` has one key per axis that **ran**, such as
-`{"standards": 3, "spec": 0}`. An axis that did not run is **absent** from the
-map: `0` means ran-and-clean, absence means not-run. The machine-readable side
-follows the same rule as the prose.
+`findingCounts` holds one key per axis that **ran**, such as
+`{"standards": 3, "spec": 0}`. `0` means ran-and-clean; an axis that did not run
+is **absent** from the map.
 
-`verdict` follows these rules in order, first match wins, so the same review
-always yields the same verdict:
+`verdict` takes the first rule that matches, so one review always yields one
+verdict:
 
-1. Any axis absent from `findingCounts` — `mixed`. An incomplete review can never
-   read as `pass`, whatever the axes that did run reported.
+1. An axis missing from `findingCounts` — `mixed`. An incomplete review never
+   reads as `pass`.
 2. Every count `0` — `pass`.
 3. Every count above `0` — `fail`.
 4. Otherwise — `mixed`.
@@ -99,15 +91,15 @@ bb tasks-plus artifact add <KEY> --kind review_result \
   --body-file <body> --meta-file <meta> --json
 ```
 
-Capture `.artifact.id`. If the command fails, report the failure and the path of
-the retained body file. Never report the review as recorded when it is not.
+Report the review as recorded once the command returns `.artifact.id`. On
+failure, report the failure and the path of the retained body file.
 
 ### 7. Comment as the index
 
-Post one milestone comment: verdict, per-axis counts, `<fixed-point>..HEAD`, and
-the artifact id. It points at the artifact; it does not restate the findings.
+One milestone comment: verdict, per-axis counts, `<fixed-point>..HEAD`, and the
+artifact id. It points at the artifact and leaves the findings in it.
 
 ## Out of scope
 
-The narrative `review` artifact and its grouped concerns are a different record
-with a different shape. This skill writes `review_result` only.
+The narrative `review` artifact, which groups the diff by concern, is a different
+record with a different shape.
