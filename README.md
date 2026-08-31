@@ -25,6 +25,10 @@ Changes from upstream:
 - Shared UI is vendored from the `@bb` shadcn registry instead of the
   monorepo-private `@bb/shared-ui` package.
 
+The `to-spec-and-design` skill is derived from Matt Pocock's `to-spec`, renamed
+and extended with a system-design phase. It is not affiliated with or endorsed
+by its author; report issues with this fork here, not upstream.
+
 ## Install
 
 ```sh
@@ -67,3 +71,21 @@ here. The only thing needing a redo is the import rewrite:
 - `@bb/shared-ui/<x>` → `@/components/ui/<x>`
 - `@bb/plugin-sdk` → `@get-bb/plugin-sdk`
 - `/plugins/tasks/` → `/plugins/tasks-plus/`
+
+## Agent skills
+
+The plugin ships the skills under `skills/`:
+
+- `tasks-plus` — teaches workers how to report progress back to tasks.
+- `to-spec-and-design` — turns a conversation into a spec and a system design,
+  approved at one gate and published as two separately fetchable documents on
+  the same task: the spec as the description, the design as an
+  `approved-plan.md` attachment.
+
+`to-spec-and-design` is a fork of Matt Pocock's `to-spec`, extended with a
+system-design phase, and renamed so it sits beside the original rather than
+replacing it. Nothing merges the two: when upstream changes, read the diff and
+carry over what is worth carrying.
+
+If you also install Matt's skills, keep both — they do different jobs, and the
+distinct names mean neither shadows the other.
