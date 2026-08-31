@@ -193,7 +193,7 @@ export function ProjectDialog({
           </Field>
           <Field
             label="Base branch"
-            hint="The fallback once neither the task nor an ancestor names a branch. Leave empty to fall through to the preset."
+            hint="The project's fallback, once neither the task nor an ancestor names a branch; empty falls through to the preset."
           >
             <Input
               value={draft.baseBranch}
