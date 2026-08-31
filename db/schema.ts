@@ -259,6 +259,26 @@ const MIGRATIONS = [
       UPDATE task_list_revision SET revision = revision + 1 WHERE id = 1;
     END;
   `,
+  `
+    CREATE TABLE task_artifacts (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN (
+        'approved_plan', 'implementation_plan', 'decision', 'evidence', 'review', 'review_result'
+      )),
+      title TEXT NOT NULL,
+      body TEXT,
+      external_url TEXT,
+      attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      source_thread_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      CHECK (source_thread_id IS NULL OR source_thread_id GLOB 'thr_*')
+    );
+
+    CREATE INDEX idx_task_artifacts_task
+      ON task_artifacts(task_id, kind, created_at, id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

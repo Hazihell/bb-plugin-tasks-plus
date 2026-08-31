@@ -13,6 +13,17 @@ export type { TaskPriority, TaskStatus };
 
 type CommentKind = "user" | "agent" | "system";
 
+export const TASK_ARTIFACT_KINDS = [
+  "approved_plan",
+  "implementation_plan",
+  "decision",
+  "evidence",
+  "review",
+  "review_result",
+] as const;
+
+export type TaskArtifactKind = (typeof TASK_ARTIFACT_KINDS)[number];
+
 export type TaskThreadLiveStatus = (typeof TASK_THREAD_LIVE_STATUSES)[number];
 
 export type PresetEnvironmentKind = (typeof PRESET_ENVIRONMENT_KINDS)[number];
@@ -104,6 +115,24 @@ export interface Attachment {
   sizeBytes: number;
   blobPath: string;
   isImage: boolean;
+  createdAt: string;
+}
+
+/**
+ * A durable engineering record a task accumulates: a plan, a decision, a piece
+ * of evidence, a review. Append-only — a newer record supersedes an older one
+ * rather than editing it.
+ */
+export interface TaskArtifact {
+  id: string;
+  taskId: string;
+  kind: TaskArtifactKind;
+  title: string;
+  body: string | null;
+  externalUrl: string | null;
+  attachmentId: string | null;
+  sourceThreadId: string | null;
+  metadata: Record<string, unknown>;
   createdAt: string;
 }
 
@@ -270,6 +299,22 @@ export interface UpdateAttachmentInput {
   sizeBytes?: number;
   blobPath?: string;
   isImage?: boolean;
+}
+
+export interface CreateTaskArtifactInput {
+  id?: string;
+  taskId: string;
+  kind: TaskArtifactKind;
+  title: string;
+  body?: string | null;
+  externalUrl?: string | null;
+  attachmentId?: string | null;
+  sourceThreadId?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ListTaskArtifactsFilters {
+  kinds?: readonly TaskArtifactKind[];
 }
 
 export interface UpsertTaskThreadInput {
