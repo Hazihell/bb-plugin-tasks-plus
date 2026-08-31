@@ -69,7 +69,10 @@ no task means no record, so there is nothing to review into.
 ### 3. Identify the standards sources
 
 Anything in the repo that documents how code should be written, such as
-`CODING_STANDARDS.md` or `CONTRIBUTING.md`.
+`CODING_STANDARDS.md` or `CONTRIBUTING.md`. Sweep the repo root, `docs/`,
+`.github/`, and the directories the diff touches; the step is done when every
+candidate found is either listed in the Standards prompt or set aside for a
+stated reason.
 
 On top of whatever the repo documents, the Standards axis always carries the
 **smell baseline** below: a fixed set of Fowler code smells (_Refactoring_,
