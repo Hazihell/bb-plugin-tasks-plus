@@ -51,7 +51,9 @@ what would unblock it.
 export class BuiltinPresetError extends Error {
   constructor(name: string, action: "edited" | "deleted") {
     super(
-      `Preset "${name}" cannot be ${action}; its contract text ships with the plugin.`,
+      action === "edited"
+        ? `Preset "${name}" ships with the plugin: its name and instructions cannot be edited, but every execution field can.`
+        : `Preset "${name}" ships with the plugin and cannot be deleted.`,
     );
     this.name = "BuiltinPresetError";
   }

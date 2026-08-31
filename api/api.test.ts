@@ -1131,7 +1131,7 @@ describe("Tasks RPC domain API", () => {
       error: {
         code: "preset_builtin",
         message:
-          'Preset "implement" cannot be edited; its contract text ships with the plugin.',
+          'Preset "implement" ships with the plugin: its name and instructions cannot be edited, but every execution field can.',
       },
     });
     const nameAttempt = tasksRpcContract.updatePreset.output.parse(
@@ -1145,7 +1145,7 @@ describe("Tasks RPC domain API", () => {
       error: {
         code: "preset_builtin",
         message:
-          'Preset "implement" cannot be edited; its contract text ships with the plugin.',
+          'Preset "implement" ships with the plugin: its name and instructions cannot be edited, but every execution field can.',
       },
     });
     const deleteAttempt = tasksRpcContract.deletePreset.output.parse(
@@ -1156,7 +1156,7 @@ describe("Tasks RPC domain API", () => {
       error: {
         code: "preset_builtin",
         message:
-          'Preset "implement" cannot be deleted; its contract text ships with the plugin.',
+          'Preset "implement" ships with the plugin and cannot be deleted.',
       },
     });
     expect(harness.realtimeSignals).toHaveLength(signalsBeforeRefusal);

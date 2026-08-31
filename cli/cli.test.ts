@@ -1226,7 +1226,7 @@ describe("bb tasks-plus CLI", () => {
       await expect(harness.runCli(args)).resolves.toMatchObject({
         exitCode: 1,
         stdout: "",
-        stderr: expect.stringContaining("contract text ships with the plugin"),
+        stderr: expect.stringContaining("ships with the plugin"),
       });
     }
 

@@ -899,12 +899,12 @@ describe("tasks storage", () => {
       });
       expect(() =>
         store.updatePreset(builtin.id, { instructions: "changed" }),
-      ).toThrow("contract text ships with the plugin");
+      ).toThrow("ships with the plugin");
       expect(() =>
         store.updatePreset(builtin.id, { name: "User preset" }),
-      ).toThrow("contract text ships with the plugin");
+      ).toThrow("ships with the plugin");
       expect(() => store.deletePreset(builtin.id)).toThrow(
-        "contract text ships with the plugin",
+        "ships with the plugin",
       );
       expect(store.getPreset(builtin.id)).toMatchObject({
         name: "implement",
