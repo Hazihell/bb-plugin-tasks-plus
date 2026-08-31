@@ -339,6 +339,36 @@ describe("@task-artifact mention provider", () => {
     }
   });
 
+  it("keeps the body verbatim, indentation and trailing blank lines included", async () => {
+    const { harness, artifactProvider, store } = setup();
+    try {
+      const project = store.tasks.createProject({
+        name: "Mentions",
+        prefix: "MEN",
+        color: "blue",
+      });
+      const task = store.tasks.createTask({
+        projectId: project.id,
+        title: "Resolve an artifact",
+      });
+      // A body that opens with an indented code block and ends in blank
+      // lines: trimming it would silently change what the markdown means.
+      const body = "    const cap = 10;\n    return cap;\n\n";
+      const artifact = store.tasks.createTaskArtifact({
+        taskId: task.id,
+        kind: "evidence",
+        title: "Verbatim body",
+        body,
+        metadata: { command: "pnpm test", exitCode: 0, evidenceKind: "unit" },
+      });
+
+      const { context } = await artifactProvider.resolve(artifact.id);
+      expect(context).toContain(`## Body\n\n${body}`);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("rejects an unknown artifact id", async () => {
     const { harness, artifactProvider } = setup();
     try {

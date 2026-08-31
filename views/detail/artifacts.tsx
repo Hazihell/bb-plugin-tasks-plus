@@ -2,7 +2,7 @@ import { useState } from "react";
 import { UrlLink } from "@get-bb/plugin-sdk/app";
 import type { TaskArtifact } from "../../shared/contract.js";
 import {
-  sortArtifactsForManifest,
+  orderArtifactsByKindThenNewest,
   TASK_ARTIFACT_KIND_LABELS,
 } from "../../shared/artifact-manifest.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
@@ -80,7 +80,7 @@ export function ArtifactsSection({ artifacts }: { artifacts: TaskArtifact[] }) {
       <div className="mb-2 pt-1.5 text-xs font-semibold text-muted-foreground">
         Artifacts
       </div>
-      {sortArtifactsForManifest(artifacts).map((artifact) => (
+      {orderArtifactsByKindThenNewest(artifacts).map((artifact) => (
         <ArtifactRow key={artifact.id} artifact={artifact} />
       ))}
     </section>

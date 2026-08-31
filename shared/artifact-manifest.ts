@@ -32,12 +32,27 @@ function newestFirst(a: ManifestArtifact, b: ManifestArtifact): number {
   return a.id < b.id ? 1 : -1;
 }
 
-export function sortArtifactsForManifest<T extends ManifestArtifact>(
+/**
+ * The one grouping every reader shares: kinds in contract order, newest first
+ * within a kind, empty kinds dropped. Both the manifest and the detail view
+ * present artifacts in this order, so it lives in exactly one place.
+ */
+function groupArtifactsByKind<T extends ManifestArtifact>(
+  artifacts: readonly T[],
+): { kind: TaskArtifactKind; artifacts: T[] }[] {
+  return TASK_ARTIFACT_KINDS.map((kind) => ({
+    kind,
+    artifacts: artifacts
+      .filter((artifact) => artifact.kind === kind)
+      .sort(newestFirst),
+  })).filter((group) => group.artifacts.length > 0);
+}
+
+/** The same order, flattened, for a reader that draws its own headings. */
+export function orderArtifactsByKindThenNewest<T extends ManifestArtifact>(
   artifacts: readonly T[],
 ): T[] {
-  return TASK_ARTIFACT_KINDS.flatMap((kind) =>
-    artifacts.filter((artifact) => artifact.kind === kind).sort(newestFirst),
-  );
+  return groupArtifactsByKind(artifacts).flatMap((group) => group.artifacts);
 }
 
 /**
@@ -52,12 +67,7 @@ export function formatArtifactManifest(
   if (artifacts.length === 0) return "None.";
 
   const groups: string[] = [];
-  for (const kind of TASK_ARTIFACT_KINDS) {
-    const ofKind = artifacts
-      .filter((artifact) => artifact.kind === kind)
-      .sort(newestFirst);
-    if (ofKind.length === 0) continue;
-
+  for (const { kind, artifacts: ofKind } of groupArtifactsByKind(artifacts)) {
     const lines = ofKind
       .slice(0, KIND_LINE_LIMIT)
       .map(

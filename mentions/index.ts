@@ -242,7 +242,7 @@ ${JSON.stringify(artifact.metadata, null, 2)}
 
 ## Body
 
-${artifact.body?.trim() || "No body recorded."}
+${artifact.body && artifact.body.trim() !== "" ? artifact.body : "No body recorded."}
 `;
 }
 
