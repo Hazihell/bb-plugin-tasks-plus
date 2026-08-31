@@ -1,7 +1,6 @@
 ---
 name: review-record
 description: "Two-axis review of the changes since a fixed point, recorded as a durable review_result artifact on the originating task."
-disable-model-invocation: true
 ---
 
 Two-axis review of the diff between `HEAD` and a fixed point, recorded on the
