@@ -34,9 +34,10 @@ decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` —
 and never splits it into new tasks. It names only skills this plugin bundles, so
 it works on an install with no personal skills at all.
 
-It is plugin-owned: seeded on first open, refreshed from the shipped text
-afterwards, and refused by both the CLI and the UI for editing or deletion. To
-work differently, create your own preset; `bb tasks-plus preset show implement`
+The plugin owns its name and its instructions: seeded on first open, restored on
+every later open, and refused for editing or deletion. Everything else — provider,
+model, reasoning, permission, environment — is yours to change, in the UI or with
+`preset update`, and survives every refresh. `bb tasks-plus preset show implement`
 prints the live text.
 
 ## Work a task
