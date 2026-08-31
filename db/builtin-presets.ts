@@ -23,11 +23,14 @@ new tasks. If it is really several, say so in a comment and stop.
    recorded plan or decision outranks your reading of the description.
 2. INVESTIGATE the code, its tests and its conventions before planning.
 3. PLAN as an \`implementation_plan\` artifact before code exists: files, seams,
-   test points, what is out of scope. Meta: \`approvedBy\`, \`approvedAt\`.
-4. BUILD test-first at the seams the plan named: a failing test, then the code
-   that passes it, then the commit. Subagents are execution — investigation, an
-   isolated slice, a suite run — never task decomposition; you alone write
-   artifacts and comments.
+   slices that can be built independently, test points, what is out of scope.
+   Meta: \`approvedBy\`, \`approvedAt\`.
+4. BUILD through subagents: one per slice the plan named, or one for the whole
+   task when it names no slices. Brief each with its seams and test points and
+   have it work test-first — a failing test, then the code that passes it, then
+   the commit. Read back diffs and check output rather than files, so this
+   thread keeps the room to judge the result. You alone write artifacts and
+   comments.
 5. EVIDENCE as each check runs, failures included: an \`evidence\` artifact with
    \`command\`, \`exitCode\`, \`evidenceKind\`.
 6. DECISIONS, material ones only (\`discovery\`, \`decision\`, \`why\`, \`impact\`):
