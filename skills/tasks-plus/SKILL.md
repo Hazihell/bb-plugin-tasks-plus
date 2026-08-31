@@ -24,6 +24,33 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
 
 `preset update` accepts the same flags; `--service-tier none` clears a tier.
 
+### The implement preset
+
+A preset's `--instructions` are appended to every seed prompt it dispatches, so
+the preset is where a working thread's lifecycle is defined, not the task
+description. The `implement` preset carries the standard contract: the dispatched
+thread owns the task end to end and never decomposes it into new tasks.
+
+1. Read the task, its parent, and every blocker; fetch the attachments and read
+   the artifacts before forming an opinion.
+2. Investigate the code before planning.
+3. Record the plan as an `implementation_plan` artifact before any code exists.
+4. Call `/implement` — it already guarantees `/tdd` at pre-agreed seams,
+   `/code-review`, and a commit. Subagents are for execution inside it, never for
+   splitting the task; only the working thread writes artifacts and comments.
+5. Record each meaningful check as an `evidence` artifact as it runs, failures
+   included.
+6. Record material discoveries as `decision` artifacts — behaviour, architecture,
+   data model, dependencies, contracts, security, performance, and any deviation
+   from the approved direction. A rename or an extracted local function is not
+   one.
+7. Run `/narrative-review` against the landed commit, then open a PR.
+8. Set `in_review` with one closing comment; a human sets `done`.
+
+Change the contract with `bb tasks-plus preset update implement --instructions
+<text>`, and check it by dispatching a throwaway task and reading the seed prompt
+in the spawned thread's log.
+
 ## Work a task
 
 1. Find and read the task before acting:
