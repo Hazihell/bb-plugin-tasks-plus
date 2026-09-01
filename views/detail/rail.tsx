@@ -639,10 +639,9 @@ export function PropertiesRail({
   // use, so the read-out reads the same remembered choice the button does.
   const lastPresetId = useLastPresetId();
   const dispatchPreset = defaultDispatchPreset(presets, lastPresetId);
-  // The read-out resolves through the dispatch's own resolver, over an
-  // ancestor lookup backed by RPC. Each id is fetched once, so resolving the
-  // task's answer and its inherited fallback costs one walk between them.
-  const baseBranch = useTasksQuery(
+  // Both read-outs resolve over the same ancestor lookup. Each id is fetched
+  // once, so the rail has one cache and one dependency list for both features.
+  const resolvedProperties = useTasksQuery(
     async (query) => {
       const fetched = new Map<string, Task | null>();
       const getTask = async (taskId: string) => {
@@ -652,13 +651,32 @@ export function PropertiesRail({
         fetched.set(taskId, ancestor);
         return ancestor;
       };
-      const scopes = { project, preset: dispatchPreset, getTask };
+      const baseBranchScopes = { project, preset: dispatchPreset, getTask };
+      const dispatchTargetScopes = {
+        project: { linkedBbProjectId: project?.linkedBbProjectId ?? null },
+        getTask,
+      };
       return {
-        resolved: await resolveBaseBranch({ ...scopes, task }),
-        inherited: await resolveBaseBranch({
-          ...scopes,
-          task: { ...task, baseBranch: null },
-        }),
+        baseBranch: {
+          resolved: await resolveBaseBranch({
+            ...baseBranchScopes,
+            task,
+          }),
+          inherited: await resolveBaseBranch({
+            ...baseBranchScopes,
+            task: { ...task, baseBranch: null },
+          }),
+        },
+        dispatchTarget: {
+          resolved: await resolveDispatchTarget({
+            ...dispatchTargetScopes,
+            task,
+          }),
+          inherited: await resolveDispatchTarget({
+            ...dispatchTargetScopes,
+            task: { ...task, dispatchBbProjectId: null },
+          }),
+        },
       };
     },
     ["tasks:changed"],
@@ -666,40 +684,10 @@ export function PropertiesRail({
       task.id,
       task.parentTaskId,
       task.baseBranch,
-      project?.baseBranch,
-      dispatchPreset?.baseBranch,
-    ],
-  );
-  // The same shape as the base-branch read-out, over the dispatch's own
-  // resolver: one cached getTask per id, and both answers off one walk.
-  const dispatchTarget = useTasksQuery(
-    async (query) => {
-      const fetched = new Map<string, Task | null>();
-      const getTask = async (taskId: string) => {
-        const cached = fetched.get(taskId);
-        if (cached !== undefined) return cached;
-        const { task: ancestor } = await query.call("getTask", { taskId });
-        fetched.set(taskId, ancestor);
-        return ancestor;
-      };
-      const scopes = {
-        project: { linkedBbProjectId: project?.linkedBbProjectId ?? null },
-        getTask,
-      };
-      return {
-        resolved: await resolveDispatchTarget({ ...scopes, task }),
-        inherited: await resolveDispatchTarget({
-          ...scopes,
-          task: { ...task, dispatchBbProjectId: null },
-        }),
-      };
-    },
-    ["tasks:changed"],
-    [
-      task.id,
-      task.parentTaskId,
       task.dispatchBbProjectId,
+      project?.baseBranch,
       project?.linkedBbProjectId,
+      dispatchPreset?.baseBranch,
     ],
   );
   return (
@@ -750,8 +738,8 @@ export function PropertiesRail({
       </div>
       <DispatchTargetMenu
         task={task}
-        readout={dispatchTarget.data?.resolved}
-        inherited={dispatchTarget.data?.inherited}
+        readout={resolvedProperties.data?.dispatchTarget.resolved}
+        inherited={resolvedProperties.data?.dispatchTarget.inherited}
         bbProjects={bbProjects.data ?? []}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}
@@ -762,8 +750,8 @@ export function PropertiesRail({
       </div>
       <BaseBranchMenu
         task={task}
-        readout={baseBranch.data?.resolved}
-        inherited={baseBranch.data?.inherited}
+        readout={resolvedProperties.data?.baseBranch.resolved}
+        inherited={resolvedProperties.data?.baseBranch.inherited}
         presetName={dispatchPreset?.name}
         onUpdate={onUpdate}
         triggerClassName={RAIL_ROW_CLASS}

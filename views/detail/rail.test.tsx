@@ -143,6 +143,7 @@ describe("dispatch target rail control", () => {
   });
 
   it("attributes an inherited target to the ancestor that names it", async () => {
+    const getTaskCalls: string[] = [];
     const parentTask = {
       ...task,
       id: PARENT_TASK_ID,
@@ -161,9 +162,12 @@ describe("dispatch target rail control", () => {
           getTaskByKey: () => ({ task: child }),
           listTasks: (input: { parentTaskId?: string } | null) =>
             input?.parentTaskId ? { tasks: [] } : { tasks: [child] },
-          getTask: (input: { taskId: string }) => ({
-            task: input.taskId === PARENT_TASK_ID ? parentTask : null,
-          }),
+          getTask: (input: { taskId: string }) => {
+            getTaskCalls.push(input.taskId);
+            return {
+              task: input.taskId === PARENT_TASK_ID ? parentTask : null,
+            };
+          },
         }),
       },
     );
@@ -175,6 +179,10 @@ describe("dispatch target rail control", () => {
       expect(trigger.textContent).toContain(OTHER_BB_PROJECT_ID),
     );
     expect(trigger.textContent).toContain("from TSK-1");
+    // Task/project data settles through multiple query generations. A single
+    // combined query makes one parent lookup per generation; separate branch
+    // and target queries made four in this harness.
+    expect(getTaskCalls.length).toBeLessThan(4);
   });
 
   it("invites a link when no scope names a bb project", async () => {
