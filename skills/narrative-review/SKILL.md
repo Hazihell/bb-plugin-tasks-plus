@@ -35,6 +35,23 @@ work is outside the review; commit it or leave it out and say so.
 `environmentId` is `$BB_ENVIRONMENT_ID`, or `null` when you are outside an
 environment.
 
+### A review answering an earlier one
+
+When the task already carries a review that a human answered, the new review is
+a round, and a round covers only what the reader has not read. Use the answered
+review's `headSha` as `<base-ref>`: everything before it has already been
+judged, and describing it again asks the reader to re-approve work they approved
+last round.
+
+```sh
+BASE=$(bb tasks-plus artifact show <previous-review-id> --json \
+  | jq -r .metadata.headSha)
+```
+
+Group and write exactly as any other review — the concerns are the new
+behaviours, not a list of fixes against the feedback. Say in one opening line
+which review this answers, and leave the earlier change to the earlier review.
+
 ## 2. Read the task back
 
 ```sh

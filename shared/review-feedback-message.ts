@@ -52,9 +52,12 @@ export function formatReviewFeedbackMessage(
           .map((comment, index) => formatComment(comment, index + 1))
           .join("\n\n");
   const summary = input.summary === "" ? "No summary was provided." : input.summary;
+  // A round asks the reviewer to read something they have not read. Naming the
+  // sha they stopped at is what makes the next review only the new work: the
+  // agent has no other way to know where the last round's reading ended.
   const followUp =
     input.verdict === "request_changes"
-      ? `\n\nWhen this work is done, write a fresh narrative review artifact on task ${input.taskKey} so the reviewer can do another round.`
+      ? `\n\nWhen this work is done, write a fresh narrative review artifact on task ${input.taskKey} so the reviewer can do another round. Set its \`baseRef\` to \`${input.headSha}\` — the sha reviewed above — so the new review covers only the changes you made in response to this feedback. Do not re-describe the work already reviewed.`
       : "";
 
   return (

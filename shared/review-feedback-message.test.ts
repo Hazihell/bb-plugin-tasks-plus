@@ -67,6 +67,9 @@ describe("formatReviewFeedbackMessage", () => {
     expect(requestChanges).toContain(instruction);
     expect(comment).not.toContain(instruction);
     expect(approve).not.toContain(instruction);
+    // And the next round starts where this one stopped reading, so it covers
+    // only the work done in answer to it.
+    expect(requestChanges).toContain(`\`baseRef\` to \`${baseInput.headSha}\``);
   });
 
   it("keeps markdown fences safe when a selected line contains backticks", () => {
