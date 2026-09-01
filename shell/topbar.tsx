@@ -2,11 +2,7 @@ import { useCallback, useMemo } from "react";
 import type { Project, Task } from "../shared/contract.js";
 import { groupTasksByStatus } from "../views/list/lib.js";
 import { listAllTasks, useTasksQuery } from "./data.js";
-import type {
-  ResolvedTasksRoute,
-  TaskViewMode,
-  TasksRoute,
-} from "./routes.js";
+import type { ResolvedTasksRoute, TaskViewMode, TasksRoute } from "./routes.js";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -199,6 +195,66 @@ interface TasksTopbarProps {
   onBack: () => void;
 }
 
+/**
+ * The crumb trail both task-context routes stand on: a back control, the
+ * owning project, then whatever names the place itself. The task detail and
+ * the review of that task differ only in that tail.
+ */
+function TaskContextBreadcrumb({
+  project,
+  backLabel,
+  onBack,
+  onNavigate,
+  children,
+}: {
+  project: Project | null;
+  backLabel: string;
+  onBack: () => void;
+  onNavigate: (route: TasksRoute) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-6 shrink-0 max-md:pointer-coarse:size-9"
+        aria-label={backLabel}
+        onClick={onBack}
+      >
+        <Icon name="ChevronLeft" className="size-4" />
+      </Button>
+      {/* In narrow containers the project crumb yields the row to the task
+          key — the back button already returns to the project. */}
+      {project ? (
+        <button
+          type="button"
+          className="hidden min-w-0 items-center gap-2 text-muted-foreground hover:text-foreground @md:flex"
+          onClick={() =>
+            // No explicit view: the shell restores the project's remembered
+            // List/Board choice.
+            onNavigate({ kind: "project", projectId: project.id, view: null })
+          }
+        >
+          <span
+            aria-hidden
+            className="size-3 shrink-0 rounded-sm"
+            style={{ backgroundColor: project.color }}
+          />
+          <span className="truncate font-medium">{project.name}</span>
+        </button>
+      ) : null}
+      {project ? (
+        <Icon
+          name="ChevronRight"
+          className="hidden size-3 shrink-0 text-muted-foreground @md:block"
+        />
+      ) : null}
+      {children}
+    </span>
+  );
+}
+
 export function TasksTopbar({
   route,
   projects,
@@ -260,42 +316,12 @@ export function TasksTopbar({
         );
       case "review":
         return (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-6 shrink-0 max-md:pointer-coarse:size-9"
-              aria-label="Back"
-              onClick={onBack}
-            >
-              <Icon name="ChevronLeft" className="size-4" />
-            </Button>
-            {project ? (
-              <button
-                type="button"
-                className="hidden min-w-0 items-center gap-2 text-muted-foreground hover:text-foreground @md:flex"
-                onClick={() =>
-                  onNavigate({
-                    kind: "project",
-                    projectId: project.id,
-                    view: null,
-                  })
-                }
-              >
-                <span
-                  aria-hidden
-                  className="size-3 shrink-0 rounded-sm"
-                  style={{ backgroundColor: project.color }}
-                />
-                <span className="truncate font-medium">{project.name}</span>
-              </button>
-            ) : null}
-            {project ? (
-              <Icon
-                name="ChevronRight"
-                className="hidden size-3 shrink-0 text-muted-foreground @md:block"
-              />
-            ) : null}
+          <TaskContextBreadcrumb
+            project={project}
+            backLabel="Back"
+            onBack={onBack}
+            onNavigate={onNavigate}
+          >
             {/* The task key stays a link back to the task the review is of. */}
             <button
               type="button"
@@ -311,54 +337,20 @@ export function TasksTopbar({
               className="size-3 shrink-0 text-muted-foreground"
             />
             <span className="whitespace-nowrap font-semibold">Review</span>
-          </span>
+          </TaskContextBreadcrumb>
         );
       case "task":
         return (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-6 shrink-0 max-md:pointer-coarse:size-9"
-              aria-label="Back (Esc)"
-              onClick={onBack}
-            >
-              <Icon name="ChevronLeft" className="size-4" />
-            </Button>
-            {/* In narrow containers the project crumb yields the row to the
-                task key — the back button already returns to the project. */}
-            {project ? (
-              <button
-                type="button"
-                className="hidden min-w-0 items-center gap-2 text-muted-foreground hover:text-foreground @md:flex"
-                onClick={() =>
-                  // No explicit view: the shell restores the project's
-                  // remembered List/Board choice.
-                  onNavigate({
-                    kind: "project",
-                    projectId: project.id,
-                    view: null,
-                  })
-                }
-              >
-                <span
-                  aria-hidden
-                  className="size-3 shrink-0 rounded-sm"
-                  style={{ backgroundColor: project.color }}
-                />
-                <span className="truncate font-medium">{project.name}</span>
-              </button>
-            ) : null}
-            {project ? (
-              <Icon
-                name="ChevronRight"
-                className="hidden size-3 shrink-0 text-muted-foreground @md:block"
-              />
-            ) : null}
+          <TaskContextBreadcrumb
+            project={project}
+            backLabel="Back (Esc)"
+            onBack={onBack}
+            onNavigate={onNavigate}
+          >
             <span className="min-w-0 truncate font-medium text-muted-foreground">
               {route.taskKey}
             </span>
-          </span>
+          </TaskContextBreadcrumb>
         );
     }
   })();

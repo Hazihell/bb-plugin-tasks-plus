@@ -1,5 +1,9 @@
-import { useMemo } from "react";
-import type { Task, TaskArtifact } from "../../shared/contract.js";
+import { useMemo, useState } from "react";
+import type {
+  ReviewDiffUnavailableReason,
+  Task,
+  TaskArtifact,
+} from "../../shared/contract.js";
 import { isReviewStale } from "../../shared/review-diff.js";
 import { useTasksQuery } from "../../shell/data.js";
 import {
@@ -7,6 +11,7 @@ import {
   type ReviewArtifact,
   type ReviewPatch,
 } from "./concern.js";
+import { TasksEditor } from "../../editor/tasks-editor.js";
 import { DelayedLoading } from "@/components/ui/delayed-loading";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -62,12 +67,47 @@ function pickReviewArtifact(
 }
 
 /** Why the patches are missing, in the reader's terms rather than the API's. */
-const DIFF_UNAVAILABLE_REASONS: Record<string, string> = {
+const DIFF_UNAVAILABLE_REASONS: Record<ReviewDiffUnavailableReason, string> = {
   not_a_review: "this artifact is not a review",
   artifact_not_found: "the review artifact is no longer stored",
   no_environment: "no environment is attached to this task",
   diff_unavailable: "the environment could not produce the diff",
 };
+
+/**
+ * The reviewer's prose, collapsed by default. It is the same narrative the
+ * concerns below carry, so it stays reachable without competing with them for
+ * the document. Markdown, rendered the way every other artifact body is.
+ */
+function ReviewNarrative({ body }: { body: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-3">
+      <button
+        type="button"
+        aria-expanded={open}
+        className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Icon
+          name={open ? "ChevronDown" : "ChevronRight"}
+          className="size-3 shrink-0"
+        />
+        Written review
+      </button>
+      {open ? (
+        <div className="mt-1">
+          <TasksEditor
+            value={body}
+            onChange={() => {}}
+            readOnly
+            variant="comment"
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 function ReviewDocument({
   task,
@@ -92,11 +132,17 @@ function ReviewDocument({
   );
   // The diff is a separate fetch on purpose: it can fail without taking the
   // narrative — the part that is actually authored — down with it.
+  // The result carries the artifact it was fetched for: this query keeps its
+  // previous data while refetching, and a narrative shown with another
+  // artifact's patches is worse than one shown with no patches at all.
   const diff = useTasksQuery(
     async (rpc) =>
       review === null
         ? null
-        : await rpc.call("getReviewDiff", { artifactId: review.id }),
+        : {
+            artifactId: review.id,
+            result: await rpc.call("getReviewDiff", { artifactId: review.id }),
+          },
     ["tasks:changed"],
     [review?.id ?? null],
   );
@@ -120,7 +166,12 @@ function ReviewDocument({
     );
   }
 
-  const result = diff.data ?? null;
+  // A result for a different artifact is retained data mid-switch: read it as
+  // still loading rather than as this review's diff.
+  const result =
+    diff.data != null && diff.data.artifactId === review.id
+      ? diff.data.result
+      : null;
   const available = result?.outcome === "available" ? result : null;
   const patches =
     available === null
@@ -134,10 +185,13 @@ function ReviewDocument({
   const stale =
     available !== null &&
     isReviewStale(available.pinnedHeadSha, available.currentHeadSha);
+  // An unknown head is neither fresh nor stale, and saying nothing would read
+  // as fresh.
+  const unconfirmed = available !== null && available.currentHeadSha === null;
   const unavailableLine = (() => {
-    if (diff.data === undefined) return diff.error;
-    if (result === null || result.outcome === "available") return null;
-    const reason = DIFF_UNAVAILABLE_REASONS[result.reason] ?? result.reason;
+    if (result === null) return diff.error;
+    if (result.outcome === "available") return null;
+    const reason = DIFF_UNAVAILABLE_REASONS[result.reason];
     return `No patches are shown: ${reason}. ${result.message}`;
   })();
 
@@ -158,11 +212,13 @@ function ReviewDocument({
             </span>
           </p>
         ) : null}
-        {review.body ? (
-          <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed">
-            {review.body}
+        {unconfirmed ? (
+          <p className="mt-3 text-xs text-muted-foreground">
+            Could not confirm the branch still sits at the reviewed head, so the
+            patches below may not be the reviewed ones.
           </p>
         ) : null}
+        {review.body ? <ReviewNarrative body={review.body} /> : null}
         {unavailableLine ? (
           <p className="mt-3 text-xs text-muted-foreground">
             {unavailableLine}

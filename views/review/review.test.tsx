@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup } from "@testing-library/react";
+import { cleanup, fireEvent } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
@@ -12,6 +12,7 @@ afterEach(cleanup);
 const PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP1";
 const TASK_ID = "01HZZZZZZZZZZZZZZZZZZZZZT5";
 const REVIEW_ID = "01HZZZZZZZZZZZZZZZZZZZZZR1";
+const OTHER_REVIEW_ID = "01HZZZZZZZZZZZZZZZZZZZZZR2";
 const EVIDENCE_ID = "01HZZZZZZZZZZZZZZZZZZZZZE1";
 const MISSING_ID = "01HZZZZZZZZZZZZZZZZZZZZZE9";
 
@@ -216,5 +217,105 @@ describe("review route", () => {
     );
 
     await slot.findByText("TSK-5 has no review artifact yet.");
+  });
+
+  it("says so when the current head could not be read", async () => {
+    const slot = openReview(
+      reviewRpc({
+        getReviewDiff: () => ({
+          outcome: "available",
+          baseRef: "main",
+          pinnedHeadSha: PINNED_SHA,
+          currentHeadSha: null,
+          environmentId: "env_abc",
+          files: [],
+        }),
+      }),
+    );
+
+    await slot.findByText(/Could not confirm/);
+    expect(slot.container.textContent).not.toContain(
+      "The branch has moved since this review was written",
+    );
+  });
+
+  it("keeps the written narrative out of the way until it is asked for", async () => {
+    const slot = openReview(
+      reviewRpc({
+        listArtifacts: () => ({
+          artifacts: [
+            evidence,
+            reviewArtifact({ body: "The narrative the reviewer wrote." }),
+          ],
+        }),
+      }),
+    );
+
+    const disclosure = await slot.findByText("Written review");
+    expect(slot.queryByText("The narrative the reviewer wrote.")).toBeNull();
+    fireEvent.click(disclosure);
+    await slot.findByText("The narrative the reviewer wrote.");
+  });
+
+  it("never pairs a review with another artifact's patches", async () => {
+    const otherReview = reviewArtifact({
+      id: OTHER_REVIEW_ID,
+      title: "A second review of the same file",
+      createdAt: "2026-07-16T10:00:00.000Z",
+      metadata: {
+        baseRef: "main",
+        headSha: PINNED_SHA,
+        environmentId: "env_abc",
+        concerns: [
+          {
+            title: "The second review's only concern",
+            why: "It cites the same file the first review cited.",
+            evidence: [],
+            decisions: [],
+            risks: "",
+            hunks: [
+              { path: "shared/patch-slice.ts", startLine: 1, endLine: 4 },
+            ],
+          },
+        ],
+      },
+    });
+    const slot = openReview(
+      reviewRpc({
+        listArtifacts: () => ({
+          artifacts: [evidence, reviewArtifact(), otherReview],
+        }),
+        // The second review's diff never settles, so anything on screen
+        // under it can only be the first review's retained patches.
+        getReviewDiff: ({ artifactId }: { artifactId: string }) =>
+          artifactId === REVIEW_ID
+            ? {
+                outcome: "available",
+                baseRef: "main",
+                pinnedHeadSha: PINNED_SHA,
+                currentHeadSha: PINNED_SHA,
+                environmentId: "env_abc",
+                files: [
+                  {
+                    path: "shared/patch-slice.ts",
+                    patch: UNPARSEABLE_PATCH,
+                    truncated: false,
+                  },
+                ],
+              }
+            : new Promise<never>(() => {}),
+      }),
+      `review/TSK-5/${REVIEW_ID}`,
+    );
+
+    await slot.findByText(/\+const two = 2;/);
+
+    const Panel = app.navPanels[0]!.component;
+    slot.lifecycle.rerender(
+      <Panel subPath={`review/TSK-5/${OTHER_REVIEW_ID}`} />,
+    );
+
+    await slot.findByText("The second review's only concern");
+    expect(slot.container.textContent).not.toContain("+const two = 2;");
   });
 });

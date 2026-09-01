@@ -1093,6 +1093,14 @@ export const tasksRpcContract = defineRpcContract({
 });
 
 export type TasksRpcContract = typeof tasksRpcContract;
+export type ReviewDiffResult = z.infer<
+  (typeof tasksRpcContract)["getReviewDiff"]["output"]
+>;
+/** The closed set of reasons the diff seam can decline to produce patches. */
+export type ReviewDiffUnavailableReason = Extract<
+  ReviewDiffResult,
+  { outcome: "unavailable" }
+>["reason"];
 export type Folder = z.infer<typeof folderSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;

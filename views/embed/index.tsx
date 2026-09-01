@@ -165,21 +165,32 @@ function InvalidTaskNotice() {
   );
 }
 
-export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
-  const navigate = useBbNavigate();
-  const taskKey = attributes.key?.trim() ?? "";
-  const fallbackTitle = attributes.title?.trim() || null;
-  const validKey = TASK_KEY_PATTERN.test(taskKey);
-  const { state, retry } = useTaskEmbed(validKey ? taskKey : "");
-
-  if (!validKey) return <InvalidTaskNotice />;
-
+/**
+ * Everything both directive cards show before a task resolves. The states are
+ * the same shape in each — only the loading announcement and the not-found
+ * glyph differ — so the card itself begins where `found` begins.
+ */
+function UnresolvedCard({
+  state,
+  taskKey,
+  fallbackTitle,
+  loadingLabel,
+  notFoundIcon,
+  retry,
+}: {
+  state: Exclude<TaskEmbedState, { kind: "found" }>;
+  taskKey: string;
+  fallbackTitle: string | null;
+  loadingLabel: string;
+  notFoundIcon: React.ReactNode;
+  retry: () => void;
+}) {
   if (state.kind === "loading") {
     return (
       <CardShell>
         <div
           role="status"
-          aria-label={`Loading task ${taskKey}`}
+          aria-label={loadingLabel}
           className="flex min-w-0 flex-1 items-center gap-2 px-1"
         >
           <Skeleton className="size-3.5 shrink-0 rounded-full" />
@@ -202,7 +213,7 @@ export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
     return (
       <CardShell dashed>
         <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
-          <StatusIcon status="backlog" />
+          {notFoundIcon}
           <span className="shrink-0 font-mono text-xs text-muted-foreground">
             {taskKey}
           </span>
@@ -217,25 +228,46 @@ export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
     );
   }
 
-  if (state.kind === "error") {
+  return (
+    <CardShell dashed>
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+        <Icon
+          name="AlertCircle"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {taskKey}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+          Couldn't load this task
+        </span>
+      </div>
+      <Button variant="ghost" size="sm" className="shrink-0" onClick={retry}>
+        Retry
+      </Button>
+    </CardShell>
+  );
+}
+
+export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
+  const navigate = useBbNavigate();
+  const taskKey = attributes.key?.trim() ?? "";
+  const fallbackTitle = attributes.title?.trim() || null;
+  const validKey = TASK_KEY_PATTERN.test(taskKey);
+  const { state, retry } = useTaskEmbed(validKey ? taskKey : "");
+
+  if (!validKey) return <InvalidTaskNotice />;
+
+  if (state.kind !== "found") {
     return (
-      <CardShell dashed>
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
-          <Icon
-            name="AlertCircle"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {taskKey}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-            Couldn't load this task
-          </span>
-        </div>
-        <Button variant="ghost" size="sm" className="shrink-0" onClick={retry}>
-          Retry
-        </Button>
-      </CardShell>
+      <UnresolvedCard
+        state={state}
+        taskKey={taskKey}
+        fallbackTitle={fallbackTitle}
+        loadingLabel={`Loading task ${taskKey}`}
+        notFoundIcon={<StatusIcon status="backlog" />}
+        retry={retry}
+      />
     );
   }
 
@@ -310,71 +342,21 @@ export function ReviewDirectiveCard({
 
   if (!validKey) return <InvalidTaskNotice />;
 
-  if (state.kind === "loading") {
+  if (state.kind !== "found") {
     return (
-      <CardShell>
-        <div
-          role="status"
-          aria-label={`Loading review for ${taskKey}`}
-          className="flex min-w-0 flex-1 items-center gap-2 px-1"
-        >
-          <Skeleton className="size-3.5 shrink-0 rounded-full" />
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {taskKey}
-          </span>
-          {fallbackTitle ? (
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">
-              {fallbackTitle}
-            </span>
-          ) : (
-            <Skeleton className="h-3.5 w-1/2" />
-          )}
-        </div>
-      </CardShell>
-    );
-  }
-
-  if (state.kind === "not_found") {
-    return (
-      <CardShell dashed>
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+      <UnresolvedCard
+        state={state}
+        taskKey={taskKey}
+        fallbackTitle={fallbackTitle}
+        loadingLabel={`Loading review for ${taskKey}`}
+        notFoundIcon={
           <Icon
             name="FileText"
             className="size-3.5 shrink-0 text-muted-foreground"
           />
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {taskKey}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-            {fallbackTitle
-              ? `${fallbackTitle} · not found`
-              : "Task not found — deleted, or its key changed"}
-          </span>
-        </div>
-        <OpenInTasksButton label="Open Tasks" />
-      </CardShell>
-    );
-  }
-
-  if (state.kind === "error") {
-    return (
-      <CardShell dashed>
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
-          <Icon
-            name="AlertCircle"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {taskKey}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-            Couldn't load this task
-          </span>
-        </div>
-        <Button variant="ghost" size="sm" className="shrink-0" onClick={retry}>
-          Retry
-        </Button>
-      </CardShell>
+        }
+        retry={retry}
+      />
     );
   }
 
