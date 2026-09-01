@@ -261,7 +261,10 @@ export function ConcernDiff({
             to leave out is said underneath: a note long enough to wrap must
             not be able to carry the button off the header with it. */}
         <div className="flex items-baseline gap-x-3">
-          <span className="min-w-0 truncate font-mono text-xs">{path}</span>
+          {/* Wraps rather than truncates: the path is how a reader knows
+              which file this is, so all of it stays readable however narrow
+              the screen. */}
+          <span className="min-w-0 break-all font-mono text-xs">{path}</span>
           {/* Only where such a remark would then be shown: a box that writes
               into another card is worse than no box. */}
           {ownsFileComments ? (

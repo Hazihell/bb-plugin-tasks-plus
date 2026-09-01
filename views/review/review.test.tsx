@@ -660,6 +660,9 @@ describe("review comments", () => {
     const row = open.parentElement!;
     expect(row.textContent).toContain("shared/patch-slice.ts");
     expect(row.textContent).not.toContain("other hunk");
+    // And the path is shown whole: it wraps, it never gets cut short.
+    const name = slot.getByText("shared/patch-slice.ts");
+    expect(name.className).not.toContain("truncate");
   });
 
   it("draws a remark about a file once, however many concerns cite it", async () => {
