@@ -632,7 +632,7 @@ describe("task delegation", () => {
       harness.callRpc("delegate", { taskId: task.id, presetId: preset.id }),
     ).rejects.toMatchObject({
       code: "handler_error",
-      message: 'Task project "Unlinked" is not linked to a bb project',
+      message: "No dispatch target resolved for task UNL-1",
     });
     expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
 
@@ -982,7 +982,7 @@ describe("delegation seed prompt", () => {
       ## Project context
 
       - Name: Tasks plugin
-      - Linked bb project: proj_tasks
+      - Linked bb project: proj_tasks (from the project)
 
       ## Sub-tasks
 

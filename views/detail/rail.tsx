@@ -29,8 +29,8 @@ import {
 import { DispatchControl } from "./threads.js";
 import { defaultDispatchPreset, useLastPresetId } from "./last-preset.js";
 import { describeBaseBranchOrigin } from "./base-branch-source.js";
-import { describeDispatchTargetOrigin } from "./dispatch-target-source.js";
 import {
+  describeDispatchTargetOrigin,
   resolveDispatchTarget,
   type DispatchTargetResolution,
 } from "../../shared/dispatch-target.js";

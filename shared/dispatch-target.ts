@@ -30,6 +30,22 @@ export interface DispatchTargetResolution {
   ancestorKey: string | null;
 }
 
+/** Short attribution shown beside a target, naming the scope that set it. */
+export function describeDispatchTargetOrigin(
+  resolution: DispatchTargetResolution,
+): string | null {
+  switch (resolution.scope) {
+    case "task":
+      return "from this task";
+    case "ancestor":
+      return `from ${resolution.ancestorKey}`;
+    case "project":
+      return "from the project";
+    case "none":
+      return null;
+  }
+}
+
 export interface DispatchTargetScopes {
   task: DispatchTargetTask;
   project: { linkedBbProjectId: string | null };

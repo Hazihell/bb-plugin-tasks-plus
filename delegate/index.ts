@@ -26,6 +26,7 @@ import {
 import { delegationRpcContract } from "./contract";
 import { resolveBaseBranch } from "../shared/base-branch";
 import {
+  describeDispatchTargetOrigin,
   resolveDispatchTarget,
   type DispatchTargetResolution,
 } from "../shared/dispatch-target";
@@ -113,12 +114,7 @@ function formatComments(comments: readonly Comment[]): string {
 
 function formatDispatchTarget(resolution: DispatchTargetResolution): string {
   const target = resolution.bbProjectId ?? "Not linked";
-  const source =
-    resolution.scope === "task"
-      ? "from this task"
-      : resolution.scope === "ancestor"
-        ? `from ${resolution.ancestorKey ?? "an ancestor"}`
-        : null;
+  const source = describeDispatchTargetOrigin(resolution);
   return `- Linked bb project: ${target}${source === null ? "" : ` (${source})`}`;
 }
 
@@ -343,7 +339,7 @@ export function handlers(
       if (bbProjectId === null) {
         throw new DelegationError(
           "project_not_linked",
-          `Task project "${project.name}" is not linked to a bb project`,
+          `No dispatch target resolved for task ${task.key}`,
         );
       }
       const preset = requirePreset(store.tasks, input.presetId);
