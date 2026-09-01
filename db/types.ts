@@ -52,6 +52,8 @@ export interface Task {
   parentTaskId: string | null;
   /** Worktree base branch for this task; null inherits from its ancestry. */
   baseBranch: string | null;
+  /** Dispatch bb project for this task; null inherits from its ancestry. */
+  dispatchBbProjectId: string | null;
   position: number;
   createdAt: string;
   updatedAt: string;
@@ -210,6 +212,7 @@ export interface CreateTaskInput {
   dueDate?: string | null;
   parentTaskId?: string | null;
   baseBranch?: string | null;
+  dispatchBbProjectId?: string | null;
 }
 
 export interface UpdateTaskInput {
@@ -220,6 +223,7 @@ export interface UpdateTaskInput {
   dueDate?: string | null;
   parentTaskId?: string | null;
   baseBranch?: string | null;
+  dispatchBbProjectId?: string | null;
 }
 
 export interface ListTasksFilters {

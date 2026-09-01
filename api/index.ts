@@ -836,6 +836,7 @@ export function registerHandlers(
             dueDate: input.dueDate,
             parentTaskId: input.parentTaskId,
             baseBranch: input.baseBranch,
+            dispatchBbProjectId: input.dispatchBbProjectId,
           });
           replaceTaskLabels(store, created.id, input.labelIds);
           return apiTask(store, created);
@@ -892,6 +893,7 @@ export function registerHandlers(
             dueDate: input.dueDate,
             parentTaskId: input.parentTaskId,
             baseBranch: input.baseBranch,
+            dispatchBbProjectId: input.dispatchBbProjectId,
           });
           if (input.labelIds) {
             replaceTaskLabels(store, current.id, input.labelIds);

@@ -59,7 +59,7 @@ describe("tasks storage", () => {
             { count: number }
           >("SELECT COUNT(*) AS count FROM schema_version")
           .get()?.count,
-      ).toBe(9);
+      ).toBe(10);
     } finally {
       await harness.dispose();
     }
@@ -336,7 +336,7 @@ describe("tasks storage", () => {
     }
   });
 
-  it("stores, clears, and rejects blank base branches on projects and tasks", async () => {
+  it("stores, clears, and rejects blank base branches and invalid dispatch targets", async () => {
     const { harness, store } = setup();
     try {
       const project = store.createProject({
@@ -350,13 +350,19 @@ describe("tasks storage", () => {
         projectId: project.id,
         title: "Carries its own branch",
         baseBranch: "feature/one",
+        dispatchBbProjectId: "proj_task",
       });
       expect(task.baseBranch).toBe("feature/one");
+      expect(task.dispatchBbProjectId).toBe("proj_task");
 
       // A default-created row inherits by carrying nothing of its own.
       expect(
         store.createTask({ projectId: project.id, title: "Inherits" })
           .baseBranch,
+      ).toBe(null);
+      expect(
+        store.createTask({ projectId: project.id, title: "Uses project target" })
+          .dispatchBbProjectId,
       ).toBe(null);
 
       expect(
@@ -365,11 +371,20 @@ describe("tasks storage", () => {
       expect(store.updateTask(task.id, { baseBranch: null }).baseBranch).toBe(
         null,
       );
+      expect(
+        store.updateTask(task.id, { dispatchBbProjectId: null })
+          .dispatchBbProjectId,
+      ).toBe(null);
       // An untouched update must not disturb the stored branch.
       store.updateTask(task.id, { baseBranch: "main" });
       expect(store.updateTask(task.id, { title: "Renamed" }).baseBranch).toBe(
         "main",
       );
+      store.updateTask(task.id, { dispatchBbProjectId: "proj_other" });
+      expect(
+        store.updateTask(task.id, { title: "Renamed again" })
+          .dispatchBbProjectId,
+      ).toBe("proj_other");
 
       expect(() =>
         store.updateProject(project.id, { baseBranch: "  " }),
@@ -377,6 +392,16 @@ describe("tasks storage", () => {
       expect(() => store.updateTask(task.id, { baseBranch: "" })).toThrow(
         "Task baseBranch",
       );
+      expect(() =>
+        store.createTask({
+          projectId: project.id,
+          title: "Invalid target",
+          dispatchBbProjectId: "not-a-project",
+        }),
+      ).toThrow("dispatchBbProjectId");
+      expect(() =>
+        store.updateTask(task.id, { dispatchBbProjectId: "not-a-project" }),
+      ).toThrow("dispatchBbProjectId");
     } finally {
       await harness.dispose();
     }

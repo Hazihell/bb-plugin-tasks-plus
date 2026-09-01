@@ -39,12 +39,15 @@ export function BbProjectLinkPicker({
   onStateChange,
   bbProjects,
   noneLabel = "Not linked",
+  ariaLabel = "Linked bb project",
 }: {
   state: BbProjectLinkState;
   onStateChange: (state: BbProjectLinkState) => void;
   bbProjects: readonly BbProjectOption[];
-  /** Label for the "no link" Select item (the rail shows "Unlink"). */
+  /** Label for the "no link" Select item (the rail shows "Inherit"). */
   noneLabel?: string;
+  /** Accessible name for the trigger, when "linked bb project" misreads. */
+  ariaLabel?: string;
 }) {
   const unavailableSelection =
     state.selection !== null &&
@@ -58,7 +61,7 @@ export function BbProjectLinkPicker({
         onStateChange({ selection: value === NO_LINK ? null : value })
       }
     >
-      <SelectTrigger aria-label="Linked bb project" className="h-8">
+      <SelectTrigger aria-label={ariaLabel} className="h-8">
         <SelectValue>
           {bbProjects.find((project) => project.id === state.selection)?.name ??
             unavailableSelection ??

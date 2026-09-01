@@ -102,11 +102,11 @@ Deleting a folder moves its projects and subfolders to the top level. No
 tasks are deleted.`;
 
 const CREATE_HELP =
-  "Usage: bb tasks-plus create [--project <prefix-or-id>] --title <title> [--description <markdown> | --description-file <path>] [--priority <priority>] [--label <name>]... [--due YYYY-MM-DD] [--parent <key-or-id>] [--base-branch <branch>] [--attach <path>]... [--machine <id-or-name>] [--json]";
+  "Usage: bb tasks-plus create [--project <prefix-or-id>] --title <title> [--description <markdown> | --description-file <path>] [--priority <priority>] [--label <name>]... [--due YYYY-MM-DD] [--parent <key-or-id>] [--base-branch <branch>] [--dispatch-target <proj_id>] [--attach <path>]... [--machine <id-or-name>] [--json]";
 const LIST_HELP = `Usage: bb tasks-plus list [--project <prefix-or-id>] [--status <status>]... [--priority <priority>]... [--label <name>]... [--active] [--search <query>] [--sort manual|priority|due] [--limit <1-${TASKS_PAGE_MAX_LIMIT}>] [--cursor <opaque>] [--json]`;
 const SHOW_HELP = "Usage: bb tasks-plus show <key-or-id> [--json]";
 const UPDATE_HELP =
-  "Usage: bb tasks-plus update <key-or-id> [--status <status>] [--priority <priority>] [--title <title>] [--description <markdown> | --description-file <path>] [--due YYYY-MM-DD | --no-due] [--parent <key-or-id> | --no-parent] [--base-branch <branch> | --no-base-branch] [--add-label <name>]... [--remove-label <name>]... [--machine <id-or-name>] [--json]";
+  "Usage: bb tasks-plus update <key-or-id> [--status <status>] [--priority <priority>] [--title <title>] [--description <markdown> | --description-file <path>] [--due YYYY-MM-DD | --no-due] [--parent <key-or-id> | --no-parent] [--base-branch <branch> | --no-base-branch] [--dispatch-target <proj_id> | --no-dispatch-target] [--add-label <name>]... [--remove-label <name>]... [--machine <id-or-name>] [--json]";
 const COMMENT_HELP =
   "Usage: bb tasks-plus comment <key-or-id> (--body <markdown> | --body-file <path>) [--author <name>] [--machine <id-or-name>] [--notify] [--json]";
 const LABEL_HELP = `Usage:
@@ -996,6 +996,7 @@ async function runCreate(
       "due",
       "parent",
       "base-branch",
+      "dispatch-target",
       "attach",
       "machine",
     ]);
@@ -1058,6 +1059,7 @@ async function runCreate(
       dueDate: option(args, "due") ?? null,
       parentTaskId: parent?.id ?? null,
       baseBranch: option(args, "base-branch") ?? null,
+      dispatchBbProjectId: option(args, "dispatch-target") ?? null,
       labelIds,
     });
     const task = unwrapTask(
@@ -1345,6 +1347,7 @@ async function runShow(domain: TasksDomain, argv: string[]): Promise<string> {
       ["Due", task.dueDate ?? "-"],
       ["Parent", task.parentTaskId ?? "-"],
       ["Base branch", task.baseBranch ?? "-"],
+      ["Dispatch target", task.dispatchBbProjectId ?? "-"],
       ["Labels", labels.map((label) => label.name).join(", ") || "-"],
       ["Created", task.createdAt],
       ["Updated", task.updatedAt],
@@ -1440,11 +1443,12 @@ async function runUpdate(
       "due",
       "parent",
       "base-branch",
+      "dispatch-target",
       "add-label",
       "remove-label",
       "machine",
     ],
-    ["no-due", "no-parent", "no-base-branch"],
+    ["no-due", "no-parent", "no-base-branch", "no-dispatch-target"],
   );
   const [address] = requirePositionals(args, 1, UPDATE_HELP);
   const task = await resolveTask(domain, address!);
@@ -1463,6 +1467,13 @@ async function runUpdate(
     args.flags.has("no-base-branch"),
     "base-branch",
     "no-base-branch",
+  );
+  const dispatchTarget = option(args, "dispatch-target");
+  validateSingleFlagChoice(
+    dispatchTarget,
+    args.flags.has("no-dispatch-target"),
+    "dispatch-target",
+    "no-dispatch-target",
   );
   const parent =
     parentAddress === undefined
@@ -1508,6 +1519,8 @@ async function runUpdate(
     !args.flags.has("no-parent") &&
     baseBranch === undefined &&
     !args.flags.has("no-base-branch") &&
+    dispatchTarget === undefined &&
+    !args.flags.has("no-dispatch-target") &&
     !labelsChanged
   ) {
     throw new CliError("no task changes were provided");
@@ -1526,6 +1539,9 @@ async function runUpdate(
             ? undefined
             : (parent?.id ?? null),
         baseBranch: args.flags.has("no-base-branch") ? null : baseBranch,
+        dispatchBbProjectId: args.flags.has("no-dispatch-target")
+          ? null
+          : dispatchTarget,
         labelIds: labelsChanged ? [...nextLabels] : undefined,
         authorName: taskAuthor(ctx),
       }),

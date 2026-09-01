@@ -155,6 +155,7 @@ const taskSchema = z
     dueDate: calendarDateSchema.nullable(),
     parentTaskId: idSchema.nullable(),
     baseBranch: nullableNonBlankSchema,
+    dispatchBbProjectId: z.string().startsWith("proj_").nullable(),
     position: z.number(),
     createdAt: z.string(),
     updatedAt: z.string(),
@@ -553,6 +554,7 @@ const updateTaskInputSchema = z
     dueDate: calendarDateSchema.nullable().optional(),
     parentTaskId: idSchema.nullable().optional(),
     baseBranch: nullableNonBlankSchema.optional(),
+    dispatchBbProjectId: z.string().startsWith("proj_").nullable().optional(),
     labelIds: taskLabelsSchema.optional(),
     authorName: nonBlankStringSchema.default("You"),
   })
@@ -566,6 +568,7 @@ const updateTaskInputSchema = z
       input.dueDate !== undefined ||
       input.parentTaskId !== undefined ||
       input.baseBranch !== undefined ||
+      input.dispatchBbProjectId !== undefined ||
       input.labelIds !== undefined,
     { message: "at least one task field must be updated" },
   );
@@ -741,6 +744,11 @@ export const tasksRpcContract = defineRpcContract({
         dueDate: calendarDateSchema.nullable().default(null),
         parentTaskId: idSchema.nullable().default(null),
         baseBranch: nullableNonBlankSchema.default(null),
+        dispatchBbProjectId: z
+          .string()
+          .startsWith("proj_")
+          .nullable()
+          .default(null),
         labelIds: taskLabelsSchema.default([]),
       })
       .strict(),

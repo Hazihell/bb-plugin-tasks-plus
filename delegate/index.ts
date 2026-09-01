@@ -25,6 +25,11 @@ import {
 } from "../shared/artifact-manifest";
 import { delegationRpcContract } from "./contract";
 import { resolveBaseBranch } from "../shared/base-branch";
+import {
+  describeDispatchTargetOrigin,
+  resolveDispatchTarget,
+  type DispatchTargetResolution,
+} from "../shared/dispatch-target";
 
 const MAX_DELEGATED_THREAD_TITLE_LENGTH = 120;
 const SYSTEM_AUTHOR_NAME = "Tasks";
@@ -68,6 +73,7 @@ interface SeedPromptInput {
   artifacts: readonly ManifestArtifact[];
   attachments: readonly Pick<Attachment, "id" | "fileName">[];
   recentComments: readonly Comment[];
+  dispatchTarget: DispatchTargetResolution;
   presetInstructions: string;
   extraInstructions?: string;
 }
@@ -106,6 +112,12 @@ function formatComments(comments: readonly Comment[]): string {
     .join("\n\n");
 }
 
+function formatDispatchTarget(resolution: DispatchTargetResolution): string {
+  const target = resolution.bbProjectId ?? "Not linked";
+  const source = describeDispatchTargetOrigin(resolution);
+  return `- Linked bb project: ${target}${source === null ? "" : ` (${source})`}`;
+}
+
 export function buildSeedPrompt(input: SeedPromptInput): string {
   const sections = [
     `# ${input.task.key} · ${input.task.title}`,
@@ -115,7 +127,7 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
     ),
     markdownSection(
       "Project context",
-      `- Name: ${input.project.name}\n- Linked bb project: ${input.project.linkedBbProjectId ?? "Not linked"}`,
+      `- Name: ${input.project.name}\n${formatDispatchTarget(input.dispatchTarget)}`,
     ),
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
     // Above Attachments on purpose: the engineering record outranks files.
@@ -171,14 +183,6 @@ function requirePreset(store: TasksStore, presetId: string): Preset {
   const preset = store.getPreset(presetId);
   if (!preset) throw new Error(`Preset not found: ${presetId}`);
   return preset;
-}
-
-function requireLinkedBbProject(project: Project): string {
-  if (project.linkedBbProjectId) return project.linkedBbProjectId;
-  throw new DelegationError(
-    "project_not_linked",
-    `Task project "${project.name}" is not linked to a bb project`,
-  );
 }
 
 function collectAttachments(
@@ -326,7 +330,18 @@ export function handlers(
       const task = requireTask(store.tasks, input.taskId);
       assertTaskCanBeDispatched(store, task);
       const project = requireProject(store.tasks, task.projectId);
-      const linkedBbProjectId = requireLinkedBbProject(project);
+      const dispatchTarget = await resolveDispatchTarget({
+        task,
+        project,
+        getTask: (taskId) => store.tasks.getTask(taskId),
+      });
+      const bbProjectId = dispatchTarget.bbProjectId;
+      if (bbProjectId === null) {
+        throw new DelegationError(
+          "project_not_linked",
+          `No dispatch target resolved for task ${task.key}`,
+        );
+      }
       const preset = requirePreset(store.tasks, input.presetId);
       const comments = store.tasks.listComments(task.id);
       const recentComments = comments.slice(-5);
@@ -341,6 +356,7 @@ export function handlers(
       const prompt = buildSeedPrompt({
         task,
         project,
+        dispatchTarget,
         subtasks: store.tasks.listSubtasks(task.id),
         artifacts: store.tasks.listTaskArtifacts(task.id),
         attachments: collectAttachments(store.tasks, task.id, comments),
@@ -360,7 +376,7 @@ export function handlers(
       const environment = await presetSpawnEnvironment(bb, preset, baseBranch);
       const thread = await bb.sdk.threads
         .spawn({
-          projectId: linkedBbProjectId,
+          projectId: bbProjectId,
           environment,
           providerId: execution.providerId,
           model: execution.model,

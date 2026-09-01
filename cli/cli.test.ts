@@ -269,7 +269,7 @@ describe("bb tasks-plus CLI", () => {
     await harness.dispose();
   });
 
-  it("sets and clears the base branch on projects and tasks", async () => {
+  it("sets and clears base branches and per-task dispatch targets", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     await plugin(bb);
 
@@ -328,11 +328,14 @@ describe("bb tasks-plus CLI", () => {
           "Owns a branch",
           "--base-branch",
           "feature/one",
+          "--dispatch-target",
+          "proj_task",
           "--json",
         ]),
       ),
     ).task;
     expect(task.baseBranch).toBe("feature/one");
+    expect(task.dispatchBbProjectId).toBe("proj_task");
 
     expect(
       JSON.parse(
@@ -360,8 +363,42 @@ describe("bb tasks-plus CLI", () => {
       ).task.baseBranch,
     ).toBe(null);
 
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "update",
+            task.key,
+            "--dispatch-target",
+            "proj_updated",
+            "--json",
+          ]),
+        ),
+      ).task.dispatchBbProjectId,
+    ).toBe("proj_updated");
+
+    expect(stdout(await harness.runCli(["show", task.key]))).toContain(
+      "Dispatch target  proj_updated",
+    );
+
+    expect(
+      JSON.parse(
+        stdout(
+          await harness.runCli([
+            "update",
+            task.key,
+            "--no-dispatch-target",
+            "--json",
+          ]),
+        ),
+      ).task.dispatchBbProjectId,
+    ).toBe(null);
+
     expect(stdout(await harness.runCli(["show", task.key]))).toContain(
       "Base branch",
+    );
+    expect(stdout(await harness.runCli(["show", task.key]))).toContain(
+      "Dispatch target  -",
     );
     expect(stdout(await harness.runCli(["project", "show", "BRN"]))).toContain(
       "Base branch  main",
@@ -380,11 +417,31 @@ describe("bb tasks-plus CLI", () => {
       stderr: "--base-branch and --no-base-branch cannot be combined",
     });
     await expect(
+      harness.runCli([
+        "update",
+        task.key,
+        "--dispatch-target",
+        "proj_task",
+        "--no-dispatch-target",
+      ]),
+    ).resolves.toMatchObject({
+      exitCode: 1,
+      stderr:
+        "--dispatch-target and --no-dispatch-target cannot be combined",
+    });
+    await expect(
       harness.runCli(["update", task.key, "--base-branch", " "]),
     ).resolves.toMatchObject({ exitCode: 1 });
     await expect(
       harness.runCli(["project", "update", "BRN", "--base-branch", " "]),
     ).resolves.toMatchObject({ exitCode: 1 });
+
+    expect(stdout(await harness.runCli(["create", "--help"]))).toContain(
+      "[--dispatch-target <proj_id>]",
+    );
+    expect(stdout(await harness.runCli(["update", "--help"]))).toContain(
+      "[--dispatch-target <proj_id> | --no-dispatch-target]",
+    );
 
     await harness.dispose();
   });
@@ -2380,7 +2437,7 @@ describe("bb tasks-plus CLI", () => {
     expect(result).toEqual({
       exitCode: 1,
       stdout: "",
-      stderr: 'Task project "Unlinked CLI" is not linked to a bb project',
+      stderr: "No dispatch target resolved for task UNL-1",
     });
     // "delegate" stays as a hidden compatibility alias for "dispatch".
     const aliased = await harness.runCli([
@@ -2390,7 +2447,7 @@ describe("bb tasks-plus CLI", () => {
       "CLI worker",
     ]);
     expect(aliased.stderr).toBe(
-      'Task project "Unlinked CLI" is not linked to a bb project',
+      "No dispatch target resolved for task UNL-1",
     );
     expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
 

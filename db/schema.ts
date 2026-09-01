@@ -283,6 +283,9 @@ const MIGRATIONS = [
     ALTER TABLE projects ADD COLUMN base_branch TEXT;
     ALTER TABLE tasks ADD COLUMN base_branch TEXT;
   `,
+  `
+    ALTER TABLE tasks ADD COLUMN dispatch_bb_project_id TEXT;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

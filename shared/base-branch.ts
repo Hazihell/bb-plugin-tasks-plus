@@ -11,6 +11,8 @@
  * answer with a promise, so resolution is asynchronous for both.
  */
 
+import { walkTaskAncestry } from "./task-ancestry";
+
 /** The parts of a task the resolver reads while walking its ancestry. */
 export interface BaseBranchTask {
   id: string;
@@ -57,25 +59,19 @@ export interface BaseBranchScopes {
 export async function resolveBaseBranch(
   scopes: BaseBranchScopes,
 ): Promise<BaseBranchResolution> {
-  const seen = new Set<string>();
-  let current: BaseBranchTask | undefined | null = scopes.task;
-  let isSelf = true;
-  while (current && !seen.has(current.id)) {
-    if (current.baseBranch !== null) {
-      return isSelf
-        ? { branch: current.baseBranch, scope: "task", ancestorKey: null }
-        : {
-            branch: current.baseBranch,
-            scope: "ancestor",
-            ancestorKey: current.key,
-          };
-    }
-    seen.add(current.id);
-    isSelf = false;
-    current =
-      current.parentTaskId === null
-        ? undefined
-        : await scopes.getTask(current.parentTaskId);
+  const match = await walkTaskAncestry(
+    scopes.task,
+    scopes.getTask,
+    (task) => task.baseBranch,
+  );
+  if (match !== null) {
+    return match.isSelf
+      ? { branch: match.value, scope: "task", ancestorKey: null }
+      : {
+          branch: match.value,
+          scope: "ancestor",
+          ancestorKey: match.task.key,
+        };
   }
   if (scopes.project?.baseBranch != null) {
     return {
