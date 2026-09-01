@@ -1280,6 +1280,85 @@ describe("tasks storage", () => {
     }
   });
 
+  it("round-trips review drafts and cascades them with their review artifact", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "DRF");
+      const task = store.createTask({
+        projectId: project.id,
+        title: "Draft review feedback",
+      });
+      const review = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Review",
+        metadata: {
+          baseRef: "main",
+          headSha: "head-1",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 0 },
+      ]);
+
+      const line = store.saveReviewDraftComment({
+        id: null,
+        reviewArtifactId: review.id,
+        anchor: {
+          anchor: "lines",
+          path: "src/save.ts",
+          side: "additions",
+          startLine: 4,
+          endLine: 5,
+          quotedLines: ["+save();", "+return result;"],
+        },
+        body: "The result can escape before save completes.",
+      });
+      const edited = store.saveReviewDraftComment({
+        id: line.id,
+        reviewArtifactId: review.id,
+        anchor: line.anchor,
+        body: "The result can escape before save completes.",
+      });
+      const file = store.saveReviewDraftComment({
+        reviewArtifactId: review.id,
+        anchor: { anchor: "file", path: "src/telemetry.ts" },
+        body: "Please cover retries.",
+      });
+      store.saveReviewDraftSummary(review.id, "One more retry test is needed.");
+
+      expect(edited).toMatchObject({
+        id: line.id,
+        createdAt: line.createdAt,
+        anchor: line.anchor,
+      });
+      expect(store.listReviewDraftComments(review.id)).toEqual([
+        edited,
+        file,
+      ]);
+      expect(store.getReviewDraftSummary(review.id)).toBe(
+        "One more retry test is needed.",
+      );
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 2 },
+      ]);
+      expect(store.deleteReviewDraftComment(line.id)).toBe(true);
+      expect(store.deleteReviewDraftComment(line.id)).toBe(false);
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 1 },
+      ]);
+
+      expect(store.deleteTaskArtifact(review.id)).toBe(true);
+      expect(store.listReviewDraftComments(review.id)).toEqual([]);
+      expect(store.getReviewDraftSummary(review.id)).toBe("");
+      expect(store.countReviewDrafts(task.id)).toEqual([]);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("keeps a task artifact when its attachment is deleted", async () => {
     const { harness, store } = setup();
     try {

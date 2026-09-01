@@ -487,6 +487,7 @@ function TaskDetail({ task }: { task: Task }) {
 
           <ArtifactsSection
             artifacts={artifacts.data ?? []}
+            taskId={task.id}
             taskKey={task.key}
           />
 

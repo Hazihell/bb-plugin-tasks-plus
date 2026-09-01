@@ -1,7 +1,10 @@
-import type { TaskArtifact } from "../../shared/contract.js";
+import type {
+  ReviewDraftComment,
+  TaskArtifact,
+} from "../../shared/contract.js";
 import { TASK_ARTIFACT_KIND_LABELS } from "../../shared/artifact-manifest.js";
 import type { PatchLineRange } from "../../shared/patch-slice.js";
-import { ConcernDiff } from "./diff.js";
+import { ConcernDiff, type ReviewCommentActions } from "./diff.js";
 import { Icon } from "@/components/ui/icon";
 
 export type ReviewArtifact = Extract<TaskArtifact, { kind: "review" }>;
@@ -71,6 +74,9 @@ interface ConcernSectionProps {
   artifacts: readonly TaskArtifact[];
   /** Patches by path; null when the diff could not be fetched at all. */
   patches: ReadonlyMap<string, ReviewPatch> | null;
+  /** Every unsent comment on this review; each diff card claims its own. */
+  comments: readonly ReviewDraftComment[];
+  actions: ReviewCommentActions;
 }
 
 /** One concern: why it matters, what it risks, what it cites, what it touched. */
@@ -78,6 +84,8 @@ export function ConcernSection({
   concern,
   artifacts,
   patches,
+  comments,
+  actions,
 }: ConcernSectionProps) {
   const groups = groupHunksByPath(concern);
   return (
@@ -121,6 +129,8 @@ export function ConcernSection({
                 patch={found.patch}
                 ranges={group.ranges}
                 truncated={found.truncated}
+                comments={comments}
+                actions={actions}
               />
             );
           })}

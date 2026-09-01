@@ -238,6 +238,41 @@ describe("artifact review launcher", () => {
     });
   });
 
+  it("says how many comments on a review are still unsent", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          listArtifacts: () => ({ artifacts: [approvedPlan, review] }),
+          countReviewDrafts: () => ({
+            counts: [{ reviewArtifactId: REVIEW_ID, count: 2 }],
+          }),
+        }),
+      },
+    );
+
+    await slot.findByText("2 unsent");
+  });
+
+  it("leaves the count off a review nobody has answered yet", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          listArtifacts: () => ({ artifacts: [approvedPlan, review] }),
+          countReviewDrafts: () => ({
+            counts: [{ reviewArtifactId: REVIEW_ID, count: 0 }],
+          }),
+        }),
+      },
+    );
+
+    await slot.findByText("Narrative review");
+    expect(slot.container.textContent).not.toContain("unsent");
+  });
+
   it("leaves rows of other kinds without the control", async () => {
     const slot = renderSlot(
       app.navPanels[0]!,

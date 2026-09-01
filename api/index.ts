@@ -33,7 +33,12 @@ import {
   type TaskStatus,
   type CommentsChangedEvent,
   type CommentProvider,
+  type ReviewDraftComment,
+  type ReviewFeedbackComment,
+  type ReviewVerdict,
+  type ThreadsChangedEvent,
 } from "../shared/contract";
+import { formatReviewFeedbackMessage } from "../shared/review-feedback-message";
 
 interface TaskLabelIdRow {
   task_id: string;
@@ -247,6 +252,11 @@ export function publishCommentsChanged(
     ...(notifiedCount === undefined ? {} : { notifiedCount }),
   };
   bb.realtime.publish("comments:changed", payload);
+}
+
+function publishThreadsChanged(bb: BbPluginApi, taskId: string): void {
+  const payload: ThreadsChangedEvent = { taskId };
+  bb.realtime.publish("threads:changed", payload);
 }
 
 function apiTask(store: TasksApiStore, task: StoredTask): Task {
@@ -780,6 +790,157 @@ async function reviewEnvironment(
     attachedEnvironments.find((entry) => entry.environmentId)?.environmentId ??
     null
   );
+}
+
+type ReviewArtifact = Extract<ApiTaskArtifact, { kind: "review" }>;
+
+class ReviewFeedbackTargetError extends Error {
+  constructor(
+    readonly reason: "no_target_thread" | "spawn_failed",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ReviewFeedbackTargetError";
+  }
+}
+
+function requireReviewArtifact(
+  store: TasksApiStore,
+  artifactId: string,
+): ReviewArtifact {
+  const storedArtifact = store.tasks.getTaskArtifact(artifactId);
+  if (!storedArtifact) {
+    throw new Error(`Task artifact not found: ${artifactId}`);
+  }
+  const artifact = apiArtifact(storedArtifact);
+  if (artifact.kind !== "review") {
+    throw new Error(`Task artifact is not a review: ${artifactId}`);
+  }
+  return artifact;
+}
+
+function feedbackCommentFromDraft(
+  draft: ReviewDraftComment,
+): ReviewFeedbackComment {
+  if (draft.anchor.anchor === "file") {
+    return {
+      anchor: "file",
+      path: draft.anchor.path,
+      body: draft.body,
+    };
+  }
+  return {
+    anchor: "lines",
+    path: draft.anchor.path,
+    side: draft.anchor.side,
+    startLine: draft.anchor.startLine,
+    endLine: draft.anchor.endLine,
+    quotedLines: [...draft.anchor.quotedLines],
+    body: draft.body,
+  };
+}
+
+function recordReviewFeedback(
+  store: TasksApiStore,
+  review: ReviewArtifact,
+  verdict: ReviewVerdict,
+  summary: string,
+  comments: readonly ReviewFeedbackComment[],
+  targetThreadId: string | null,
+): ApiTaskArtifact {
+  const artifact = apiArtifact(
+    store.tasks.createTaskArtifact({
+      taskId: review.taskId,
+      kind: "review_feedback",
+      title: `Feedback on ${review.title}`,
+      metadata: {
+        reviewArtifactId: review.id,
+        verdict,
+        summary,
+        comments: [...comments],
+        headSha: review.metadata.headSha,
+        targetThreadId,
+      },
+    }),
+  );
+  store.tasks.deleteReviewDrafts(review.id);
+  return artifact;
+}
+
+async function spawnReviewFeedbackThread(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  task: StoredTask,
+  review: ReviewArtifact,
+): Promise<string> {
+  const sourceThreadId = review.sourceThreadId;
+  if (sourceThreadId === null) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      "The reviewing thread is gone or has no environment, so a feedback thread cannot be spawned.",
+    );
+  }
+
+  let reviewingThread: Awaited<ReturnType<BbPluginApi["sdk"]["threads"]["get"]>>;
+  try {
+    reviewingThread = await bb.sdk.threads.get({ threadId: sourceThreadId });
+  } catch (error) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      `The reviewing thread is gone or has no environment, so a feedback thread cannot be spawned: ${errorMessage(error)}`,
+    );
+  }
+  if (!reviewingThread.environmentId) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      "The reviewing thread is gone or has no environment, so a feedback thread cannot be spawned.",
+    );
+  }
+
+  const sourceTaskThread = store.tasks.getTaskThreadByThreadId(
+    task.id,
+    sourceThreadId,
+  );
+  const preset = sourceTaskThread
+    ? store.tasks
+        .listPresets()
+        .find((candidate) => candidate.name === sourceTaskThread.presetName)
+    : undefined;
+  if (!preset) {
+    throw new ReviewFeedbackTargetError(
+      "no_target_thread",
+      "The reviewing thread has no stored preset, so a feedback thread cannot be spawned without guessing its execution settings.",
+    );
+  }
+
+  const title = `${task.key} · ${review.title} feedback`;
+  const spawned = await bb.sdk.threads.spawn({
+    projectId: reviewingThread.projectId,
+    environment: {
+      type: "reuse",
+      environmentId: reviewingThread.environmentId,
+    },
+    providerId: preset.providerId,
+    model: preset.modelId,
+    reasoningLevel: preset.reasoningLevel,
+    ...(preset.serviceTier === null
+      ? {}
+      : { serviceTier: preset.serviceTier }),
+    permissionMode: preset.permissionMode,
+    title,
+    prompt:
+      "A review feedback round will be delivered in the next message; wait for that message before taking action.",
+  });
+
+  store.tasks.upsertTaskThread({
+    taskId: task.id,
+    threadId: spawned.id,
+    presetName: preset.name,
+    title,
+    liveStatus: "starting",
+  });
+  publishThreadsChanged(bb, task.id);
+  return spawned.id;
 }
 
 async function getReviewDiff(
@@ -1369,6 +1530,169 @@ export function registerHandlers(
     },
     async getReviewDiff(input) {
       return getReviewDiff(bb, store, input.artifactId);
+    },
+    listReviewDrafts(input) {
+      const review = requireReviewArtifact(store, input.reviewArtifactId);
+      return {
+        comments: store.tasks.listReviewDraftComments(review.id),
+        summary: store.tasks.getReviewDraftSummary(review.id),
+      };
+    },
+    saveReviewDraftComment(input) {
+      const review = requireReviewArtifact(store, input.reviewArtifactId);
+      const comment = store.tasks.saveReviewDraftComment(input);
+      const task = store.tasks.getTask(review.taskId);
+      if (task) publishTasksChanged(bb, task.id, task.projectId);
+      return { comment };
+    },
+    deleteReviewDraftComment(input) {
+      const draft = store.tasks.getReviewDraftComment(input.id);
+      const deleted = store.tasks.deleteReviewDraftComment(input.id);
+      if (deleted && draft) {
+        const review = store.tasks.getTaskArtifact(draft.reviewArtifactId);
+        const task = review ? store.tasks.getTask(review.taskId) : undefined;
+        if (task) publishTasksChanged(bb, task.id, task.projectId);
+      }
+      return { deleted };
+    },
+    saveReviewDraftSummary(input) {
+      const review = requireReviewArtifact(store, input.reviewArtifactId);
+      store.tasks.saveReviewDraftSummary(review.id, input.body);
+      const task = store.tasks.getTask(review.taskId);
+      if (task) publishTasksChanged(bb, task.id, task.projectId);
+      return { ok: true };
+    },
+    countReviewDrafts(input) {
+      return { counts: store.tasks.countReviewDrafts(input.taskId) };
+    },
+    async submitReviewFeedback(input) {
+      const storedArtifact = store.tasks.getTaskArtifact(input.reviewArtifactId);
+      if (!storedArtifact) {
+        return {
+          outcome: "failed" as const,
+          reason: "artifact_not_found" as const,
+          message: `Task artifact not found: ${input.reviewArtifactId}`,
+        };
+      }
+
+      const artifact = apiArtifact(storedArtifact);
+      if (artifact.kind !== "review") {
+        return {
+          outcome: "failed" as const,
+          reason: "not_a_review" as const,
+          message: `Task artifact is not a review: ${input.reviewArtifactId}`,
+        };
+      }
+
+      const task = store.tasks.getTask(artifact.taskId);
+      if (!task) throw new Error(`Task not found: ${artifact.taskId}`);
+      const drafts = store.tasks.listReviewDraftComments(artifact.id);
+      const summary = store.tasks.getReviewDraftSummary(artifact.id);
+      const comments = drafts.map(feedbackCommentFromDraft);
+
+      let targetThreadId: string | null = null;
+      let failure: {
+        reason: "no_target_thread" | "spawn_failed";
+        message: string;
+      } | null = null;
+
+      if (input.verdict !== "approve") {
+        if (input.target === null) {
+          failure = {
+            reason: "no_target_thread",
+            message: "No target thread was selected for this review feedback round.",
+          };
+        } else if (input.target.kind === "existing") {
+          const attached = store.tasks.getTaskThreadByThreadId(
+            task.id,
+            input.target.threadId,
+          );
+          if (!attached) {
+            failure = {
+              reason: "no_target_thread",
+              message: `Thread ${input.target.threadId} is not attached to task ${task.key}.`,
+            };
+          } else {
+            targetThreadId = input.target.threadId;
+          }
+        } else {
+          try {
+            targetThreadId = await spawnReviewFeedbackThread(
+              bb,
+              store,
+              task,
+              artifact,
+            );
+          } catch (error) {
+            failure = {
+              reason:
+                error instanceof ReviewFeedbackTargetError
+                  ? error.reason
+                  : "spawn_failed",
+              message: `Could not spawn the feedback thread: ${errorMessage(error)}`,
+            };
+          }
+        }
+      }
+
+      const feedback = recordReviewFeedback(
+        store,
+        artifact,
+        input.verdict,
+        summary,
+        comments,
+        targetThreadId,
+      );
+      publishTasksChanged(bb, task.id, task.projectId);
+
+      if (failure !== null) {
+        return {
+          outcome: "failed" as const,
+          reason: failure.reason,
+          message: `The review feedback round was recorded, but it was not delivered: ${failure.message}`,
+        };
+      }
+
+      if (input.verdict === "approve") {
+        return {
+          outcome: "submitted" as const,
+          artifactId: feedback.id,
+          threadId: null,
+        };
+      }
+
+      if (targetThreadId === null) {
+        throw new Error("Review feedback target resolution produced no thread");
+      }
+
+      const message = formatReviewFeedbackMessage({
+        taskKey: task.key,
+        reviewTitle: artifact.title,
+        baseRef: artifact.metadata.baseRef,
+        headSha: artifact.metadata.headSha,
+        verdict: input.verdict,
+        summary,
+        comments,
+      });
+      try {
+        await bb.sdk.threads.send({
+          threadId: targetThreadId,
+          input: [{ type: "text", text: message, mentions: [] }],
+          mode: "auto",
+        });
+      } catch (error) {
+        return {
+          outcome: "failed" as const,
+          reason: "send_failed" as const,
+          message: `The review feedback round was recorded but not delivered: ${errorMessage(error)}`,
+        };
+      }
+
+      return {
+        outcome: "submitted" as const,
+        artifactId: feedback.id,
+        threadId: targetThreadId,
+      };
     },
     createPreset(input) {
       const preset = store.tasks.createPreset({ ...input, builtin: false });

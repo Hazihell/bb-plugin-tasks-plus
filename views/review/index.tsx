@@ -2,16 +2,20 @@ import { useMemo, useState } from "react";
 import type {
   ReviewDiffUnavailableReason,
   Task,
-  TaskArtifact,
 } from "../../shared/contract.js";
 import { isReviewStale } from "../../shared/review-diff.js";
 import { useTasksQuery } from "../../shell/data.js";
 import { useDiffWordWrap } from "../../shell/diff-preference.js";
+import { useTasksNavigation } from "../../shell/routes.js";
+import { ConcernSection, type ReviewPatch } from "./concern.js";
+import { useReviewDrafts } from "./drafts.js";
 import {
-  ConcernSection,
-  type ReviewArtifact,
-  type ReviewPatch,
-} from "./concern.js";
+  pickReviewRound,
+  RoundSwitcher,
+  summariseReviewRounds,
+  type ReviewRound,
+} from "./rounds.js";
+import { SubmitPanel } from "./submit.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
 import { DelayedLoading } from "@/components/ui/delayed-loading";
 import { Icon } from "@/components/ui/icon";
@@ -46,24 +50,6 @@ function EmptyNotice({ children }: { children: React.ReactNode }) {
       <Icon name="FileQuestion" className="size-5" />
       {children}
     </div>
-  );
-}
-
-/** Newest first by creation, matching how the artifacts section orders a kind. */
-function pickReviewArtifact(
-  artifacts: readonly TaskArtifact[],
-  artifactId: string | null,
-): ReviewArtifact | null {
-  const reviews = artifacts.filter(
-    (artifact): artifact is ReviewArtifact => artifact.kind === "review",
-  );
-  if (artifactId !== null) {
-    return reviews.find((review) => review.id === artifactId) ?? null;
-  }
-  return (
-    [...reviews].sort((left, right) =>
-      right.createdAt.localeCompare(left.createdAt),
-    )[0] ?? null
   );
 }
 
@@ -119,12 +105,29 @@ function ReviewNarrative({ body }: { body: string }) {
  * under it, and a shared constant is cheaper than telling one element how tall
  * another turned out to be.
  */
-function DiffToolbar({ range }: { range: string }) {
+function DiffToolbar({
+  range,
+  rounds,
+  current,
+  onSelectRound,
+}: {
+  range: string;
+  rounds: readonly ReviewRound[];
+  current: ReviewRound;
+  onSelectRound: (round: ReviewRound) => void;
+}) {
   return (
     <div className="sticky top-0 z-20 -mx-8 flex h-10 items-center justify-between gap-3 border-b border-border-hairline bg-background px-8">
-      <span className="truncate font-mono text-xs text-muted-foreground">
+      {/* On a narrow screen the round matters more than the range, and only
+          one of the two fits next to the wrap toggle. */}
+      <span className="hidden truncate font-mono text-xs text-muted-foreground sm:inline">
         {range}
       </span>
+      <RoundSwitcher
+        rounds={rounds}
+        current={current}
+        onSelect={onSelectRound}
+      />
       <WordWrapToggle />
     </div>
   );
@@ -168,12 +171,23 @@ function ReviewDocument({
     ["tasks:changed"],
     [task.id],
   );
-  const review = useMemo(
+  const navigation = useTasksNavigation();
+  const rounds = useMemo(
+    () => summariseReviewRounds(artifacts.data ?? []),
+    [artifacts.data],
+  );
+  const round = useMemo(
     () =>
-      artifacts.data === undefined
-        ? null
-        : pickReviewArtifact(artifacts.data, artifactId),
-    [artifacts.data, artifactId],
+      artifacts.data === undefined ? null : pickReviewRound(rounds, artifactId),
+    [artifacts.data, rounds, artifactId],
+  );
+  const review = round?.review ?? null;
+  const drafts = useReviewDrafts(review?.id ?? null);
+  const saveComment = drafts.saveComment;
+  const deleteComment = drafts.deleteComment;
+  const commentActions = useMemo(
+    () => ({ save: saveComment, remove: deleteComment }),
+    [saveComment, deleteComment],
   );
   // The diff is a separate fetch on purpose: it can fail without taking the
   // narrative — the part that is actually authored — down with it.
@@ -201,7 +215,7 @@ function ReviewDocument({
       <ReviewSkeleton />
     );
   }
-  if (review === null) {
+  if (review === null || round === null) {
     return (
       <EmptyNotice>
         {artifactId === null
@@ -274,7 +288,18 @@ function ReviewDocument({
           </p>
         ) : null}
       </header>
-      <DiffToolbar range={range} />
+      <DiffToolbar
+        range={range}
+        rounds={rounds}
+        current={round}
+        onSelectRound={(next) =>
+          navigation.go({
+            kind: "review",
+            taskKey: task.key,
+            artifactId: next.review.id,
+          })
+        }
+      />
       {review.metadata.concerns.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">
           This review raised no concerns.
@@ -289,17 +314,32 @@ function ReviewDocument({
               concern={concern}
               artifacts={artifacts.data ?? []}
               patches={patches}
+              comments={drafts.comments}
+              actions={commentActions}
             />
           ))}
         </div>
       )}
+      <SubmitPanel
+        taskId={task.id}
+        reviewArtifactId={review.id}
+        sourceThreadId={review.sourceThreadId}
+        drafts={drafts}
+        onSubmitted={() => {
+          drafts.resetSummary();
+          drafts.refresh();
+          artifacts.refresh();
+        }}
+      />
     </div>
   );
 }
 
 /**
  * A review artifact read as a document: the narrative the reviewer wrote, with
- * each concern's own patches under it. Read-only — reviews are agent-written.
+ * each concern's own patches under it. The prose and the concerns are the
+ * agent's and are never edited here; what the human adds is comments on the
+ * lines, which live as drafts until a round is submitted.
  */
 export function ReviewView({ taskKey, artifactId }: ReviewViewProps) {
   const query = useTasksQuery(

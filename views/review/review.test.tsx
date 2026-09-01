@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent } from "@testing-library/react";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
@@ -366,5 +366,435 @@ describe("review route", () => {
 
     await slot.findByText("The second review's only concern");
     expect(slot.container.textContent).not.toContain("+const two = 2;");
+  });
+});
+
+// jsdom has no ResizeObserver, which the diff renderer sets up on mount; a
+// stub is enough for it to lay a patch out and hand back its shadow tree.
+// The round switcher is a Radix menu: jsdom implements neither pointer
+// capture nor matchMedia, and Radix asks for both before it will open.
+if (!window.matchMedia) {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
+Element.prototype.hasPointerCapture ??= () => false;
+Element.prototype.setPointerCapture ??= () => {};
+Element.prototype.releasePointerCapture ??= () => {};
+Element.prototype.scrollIntoView ??= () => {};
+
+class TestResizeObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+globalThis.ResizeObserver ??=
+  TestResizeObserver as unknown as typeof ResizeObserver;
+
+const THREAD_ID = "thr_review";
+const OTHER_THREAD_ID = "thr_other";
+const DRAFT_ID = "01HZZZZZZZZZZZZZZZZZZZZZC1";
+const FEEDBACK_ID = "01HZZZZZZZZZZZZZZZZZZZZZF1";
+
+// A patch the renderer can actually parse, so the line the comment hangs on
+// is a line the diff drew.
+const PARSED_PATCH = [
+  "diff --git a/shared/patch-slice.ts b/shared/patch-slice.ts",
+  "index 1111111..2222222 100644",
+  "--- a/shared/patch-slice.ts",
+  "+++ b/shared/patch-slice.ts",
+  "@@ -1,3 +1,4 @@",
+  " const one = 1;",
+  "+const two = 2;",
+  " const three = 3;",
+  "",
+].join("\n");
+
+const lineDraft = {
+  id: DRAFT_ID,
+  reviewArtifactId: REVIEW_ID,
+  anchor: {
+    anchor: "lines",
+    path: "shared/patch-slice.ts",
+    side: "additions",
+    startLine: 2,
+    endLine: 2,
+    quotedLines: ["+const two = 2;"],
+  },
+  body: "This line worries me",
+  createdAt: "2026-07-15T11:00:00.000Z",
+  updatedAt: "2026-07-15T11:00:00.000Z",
+};
+
+function taskThread(threadId: string, title: string) {
+  return {
+    id: `01HZZZZZZZZZZZZZZZZZZZZT${threadId.length}`,
+    taskId: TASK_ID,
+    threadId,
+    presetName: "reviewer",
+    title,
+    liveStatus: "idle",
+    attachedAt: "2026-07-15T00:00:00.000Z",
+    updatedAt: "2026-07-15T00:00:00.000Z",
+  };
+}
+
+function answerableRpc(overrides: Record<string, unknown> = {}) {
+  return reviewRpc({
+    listArtifacts: () => ({
+      artifacts: [reviewArtifact({ sourceThreadId: THREAD_ID })],
+    }),
+    getReviewDiff: () => ({
+      outcome: "available",
+      baseRef: "main",
+      pinnedHeadSha: PINNED_SHA,
+      currentHeadSha: PINNED_SHA,
+      environmentId: "env_abc",
+      files: [
+        {
+          path: "shared/patch-slice.ts",
+          patch: PARSED_PATCH,
+          truncated: false,
+        },
+      ],
+    }),
+    listReviewDrafts: () => ({ comments: [], summary: "" }),
+    listTaskThreads: () => ({
+      taskThreads: [
+        taskThread(OTHER_THREAD_ID, "A second thread"),
+        taskThread(THREAD_ID, "The reviewing thread"),
+      ],
+    }),
+    saveReviewDraftComment: () => ({ comment: lineDraft }),
+    deleteReviewDraftComment: () => ({ deleted: true }),
+    saveReviewDraftSummary: () => ({ ok: true }),
+    submitReviewFeedback: () => ({
+      outcome: "submitted",
+      artifactId: FEEDBACK_ID,
+      threadId: THREAD_ID,
+    }),
+    ...overrides,
+  });
+}
+
+/** The shadow tree the diff renderer built for the one rendered file. */
+function diffShadowRoot(container: HTMLElement): ShadowRoot {
+  const host = container.querySelector("diffs-container");
+  if (host === null) throw new Error("no diff was rendered");
+  const root = host.shadowRoot;
+  if (root === null) throw new Error("the diff rendered no shadow tree");
+  return root;
+}
+
+describe("review comments", () => {
+  it("hangs an unsent comment on the line it points at", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listReviewDrafts: () => ({ comments: [lineDraft], summary: "" }),
+      }),
+    );
+
+    await slot.findAllByText("This line worries me");
+    // The renderer opened a slot for exactly that line and side, and the
+    // comment is what it projects into it: the comment sits under line 2 of
+    // the patch, not merely somewhere on the page.
+    await waitFor(() => {
+      const annotation = diffShadowRoot(
+        slot.container,
+      ).querySelector<HTMLSlotElement>("slot[name='annotation-additions-2']");
+      expect(annotation).not.toBeNull();
+      expect(annotation!.assignedNodes()[0]!.textContent).toContain(
+        "This line worries me",
+      );
+    });
+  });
+
+  it("leaves the patch's own lines selectable", async () => {
+    const slot = openReview(answerableRpc());
+
+    await slot.findByText("Slicing hides the rest of the file");
+    await waitFor(() => {
+      const code = diffShadowRoot(slot.container).querySelector("pre");
+      expect(code?.hasAttribute("data-interactive-line-numbers")).toBe(true);
+    });
+  });
+
+  it("takes a remark about a whole file from that file's header", async () => {
+    const slot = openReview(answerableRpc());
+
+    const open = await slot.findByRole("button", {
+      name: "Comment on shared/patch-slice.ts",
+    });
+    fireEvent.click(open);
+    fireEvent.change(await slot.findByLabelText("Comment"), {
+      target: { value: "This file does two jobs" },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Add comment" }));
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "saveReviewDraftComment",
+        input: {
+          id: null,
+          reviewArtifactId: REVIEW_ID,
+          anchor: { anchor: "file", path: "shared/patch-slice.ts" },
+          body: "This file does two jobs",
+        },
+      }),
+    );
+  });
+
+  it("keeps an unsent comment editable and discardable", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listReviewDrafts: () => ({ comments: [lineDraft], summary: "" }),
+      }),
+    );
+
+    fireEvent.click((await slot.findAllByLabelText("Edit comment"))[0]!);
+    fireEvent.change(slot.getByLabelText("Comment"), {
+      target: { value: "Rewritten" },
+    });
+    fireEvent.click(slot.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "saveReviewDraftComment",
+        input: {
+          id: DRAFT_ID,
+          reviewArtifactId: REVIEW_ID,
+          anchor: lineDraft.anchor,
+          body: "Rewritten",
+        },
+      }),
+    );
+
+    fireEvent.click(slot.getAllByLabelText("Discard comment")[0]!);
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "deleteReviewDraftComment",
+        input: { id: DRAFT_ID },
+      }),
+    );
+  });
+});
+
+function feedbackArtifact(
+  reviewArtifactId: string,
+  verdict: string,
+  createdAt: string,
+) {
+  return {
+    id: `${FEEDBACK_ID}${verdict[0]}`,
+    taskId: TASK_ID,
+    kind: "review_feedback",
+    title: "Human review",
+    body: null,
+    externalUrl: null,
+    attachmentId: null,
+    sourceThreadId: null,
+    metadata: {
+      reviewArtifactId,
+      verdict,
+      summary: "",
+      comments: [],
+      headSha: PINNED_SHA,
+      targetThreadId: null,
+    },
+    createdAt,
+  };
+}
+
+const secondReview = reviewArtifact({
+  id: OTHER_REVIEW_ID,
+  title: "A second look after the fixes",
+  createdAt: "2026-07-16T10:00:00.000Z",
+});
+
+describe("review rounds", () => {
+  it("opens on the newest round nobody has answered", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listArtifacts: () => ({
+          artifacts: [
+            reviewArtifact(),
+            secondReview,
+            feedbackArtifact(REVIEW_ID, "request_changes", "2026-07-15T12:00:00.000Z"),
+          ],
+        }),
+      }),
+    );
+
+    await slot.findByText("A second look after the fixes");
+    slot.getByText("Round 2 of 2");
+    slot.getByText("Unanswered");
+  });
+
+  it("falls back to the newest round once every one is answered", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listArtifacts: () => ({
+          artifacts: [
+            reviewArtifact(),
+            secondReview,
+            feedbackArtifact(REVIEW_ID, "request_changes", "2026-07-15T12:00:00.000Z"),
+            feedbackArtifact(OTHER_REVIEW_ID, "approve", "2026-07-16T12:00:00.000Z"),
+          ],
+        }),
+      }),
+    );
+
+    await slot.findByText("A second look after the fixes");
+    slot.getByText("Approved");
+    expect(slot.container.textContent).not.toContain("Unanswered");
+  });
+
+  it("routes to the round the reader picks", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listArtifacts: () => ({ artifacts: [reviewArtifact(), secondReview] }),
+      }),
+    );
+
+    fireEvent.pointerDown(
+      await slot.findByText("Round 2 of 2"),
+      { button: 0, ctrlKey: false, pointerType: "mouse" },
+    );
+    fireEvent.click(await slot.findByText("Round 1"));
+
+    await waitFor(() =>
+      expect(slot.navigateCalls).toContainEqual({
+        method: "toPluginPanel",
+        path: "tasks",
+        options: { subPath: `review/TSK-5/${REVIEW_ID}` },
+      }),
+    );
+  });
+});
+
+/** The round can only go out once it carries something, so wait for that. */
+async function clickSubmitRound(slot: ReturnType<typeof openReview>) {
+  const button = (await slot.findByRole("button", {
+    name: "Submit review",
+  })) as HTMLButtonElement;
+  await waitFor(() => expect(button.disabled).toBe(false));
+  fireEvent.click(button);
+}
+
+describe("submitting a round", () => {
+  const withOneDraft = (overrides: Record<string, unknown> = {}) =>
+    answerableRpc({
+      listReviewDrafts: () => ({ comments: [lineDraft], summary: "" }),
+      ...overrides,
+    });
+
+  it("sends the round to the thread that wrote the review", async () => {
+    const slot = openReview(withOneDraft());
+
+    fireEvent.click(await slot.findByRole("button", { name: "Request changes" }));
+    await clickSubmitRound(slot);
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "submitReviewFeedback",
+        input: {
+          reviewArtifactId: REVIEW_ID,
+          verdict: "request_changes",
+          target: { kind: "existing", threadId: THREAD_ID },
+        },
+      }),
+    );
+    await slot.findByText(/Sent\./);
+  });
+
+  it("asks for no thread when the verdict is an approval", async () => {
+    const slot = openReview(
+      withOneDraft({
+        submitReviewFeedback: () => ({
+          outcome: "submitted",
+          artifactId: FEEDBACK_ID,
+          threadId: null,
+        }),
+      }),
+    );
+
+    fireEvent.click(await slot.findByRole("button", { name: "Approve" }));
+    expect(slot.queryByText("The reviewing thread")).toBeNull();
+    await clickSubmitRound(slot);
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "submitReviewFeedback",
+        input: {
+          reviewArtifactId: REVIEW_ID,
+          verdict: "approve",
+          target: null,
+        },
+      }),
+    );
+    await slot.findByText("Approval recorded on the task.");
+  });
+
+  it("can start a fresh thread for the round instead", async () => {
+    const slot = openReview(withOneDraft());
+
+    fireEvent.click(await slot.findByRole("button", { name: "New thread" }));
+    await clickSubmitRound(slot);
+
+    await waitFor(() =>
+      expect(
+        slot.rpcCalls,
+      ).toContainEqual({
+        method: "submitReviewFeedback",
+        input: {
+          reviewArtifactId: REVIEW_ID,
+          verdict: "comment",
+          target: { kind: "new" },
+        },
+      }),
+    );
+  });
+
+  it("keeps the reviewer's place when the send fails", async () => {
+    const slot = openReview(
+      withOneDraft({
+        submitReviewFeedback: () => ({
+          outcome: "failed",
+          reason: "send_failed",
+          message: "The thread is archived.",
+        }),
+      }),
+    );
+
+    await clickSubmitRound(slot);
+
+    await slot.findByText(/the thread would not take the message/);
+    slot.getByText("The thread is archived.", { exact: false });
+    // The drafts are still drafts, and the round can be sent somewhere else.
+    slot.getAllByText("This line worries me");
+    slot.getByRole("button", { name: "Submit review" });
+  });
+
+  it("saves the overall note before sending the round", async () => {
+    const slot = openReview(withOneDraft());
+
+    fireEvent.change(await slot.findByLabelText("Overall note"), {
+      target: { value: "Mostly good." },
+    });
+    await clickSubmitRound(slot);
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "saveReviewDraftSummary",
+        input: { reviewArtifactId: REVIEW_ID, body: "Mostly good." },
+      }),
+    );
   });
 });

@@ -6,6 +6,7 @@ import {
   TASK_ARTIFACT_KIND_LABELS,
 } from "../../shared/artifact-manifest.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
+import { useTasksQuery } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { attachmentDownloadUrl } from "./attachments.js";
 import { formatRelativeTime } from "./meta.js";
@@ -19,9 +20,12 @@ import { Icon } from "@/components/ui/icon";
 function ArtifactRow({
   artifact,
   taskKey,
+  unsentDrafts,
 }: {
   artifact: TaskArtifact;
   taskKey: string;
+  /** Comments written against this review and not yet submitted. */
+  unsentDrafts: number;
 }) {
   const [open, setOpen] = useState(false);
   const navigation = useTasksNavigation();
@@ -52,6 +56,14 @@ function ArtifactRow({
             {formatRelativeTime(artifact.createdAt)}
           </time>
         </button>
+        {unsentDrafts > 0 ? (
+          <span
+            className="shrink-0 rounded-sm bg-secondary px-1.5 py-px text-2xs font-semibold text-foreground"
+            title="Comments you have not submitted yet"
+          >
+            {unsentDrafts} unsent
+          </span>
+        ) : null}
         {artifact.kind === "review" ? (
           <button
             type="button"
@@ -99,11 +111,24 @@ function ArtifactRow({
  *  agents through the CLI, so there is no add or delete affordance here. */
 export function ArtifactsSection({
   artifacts,
+  taskId,
   taskKey,
 }: {
   artifacts: TaskArtifact[];
+  taskId: string;
   taskKey: string;
 }) {
+  // One count per review, fetched apart from the artifacts themselves: an
+  // unsent comment is the reader's own state, not the task's record. A
+  // failure here simply leaves the badges off.
+  const drafts = useTasksQuery(
+    async (query) => (await query.call("countReviewDrafts", { taskId })).counts,
+    ["tasks:changed"],
+    [taskId],
+  );
+  const unsentByReview = new Map(
+    (drafts.data ?? []).map((entry) => [entry.reviewArtifactId, entry.count]),
+  );
   if (artifacts.length === 0) return null;
   return (
     <section className="mt-6">
@@ -111,7 +136,12 @@ export function ArtifactsSection({
         Artifacts
       </div>
       {orderArtifactsByKindThenNewest(artifacts).map((artifact) => (
-        <ArtifactRow key={artifact.id} artifact={artifact} taskKey={taskKey} />
+        <ArtifactRow
+          key={artifact.id}
+          artifact={artifact}
+          taskKey={taskKey}
+          unsentDrafts={unsentByReview.get(artifact.id) ?? 0}
+        />
       ))}
     </section>
   );
