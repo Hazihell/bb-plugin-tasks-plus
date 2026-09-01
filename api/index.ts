@@ -599,6 +599,10 @@ interface TaskPullRequestsResult {
  *  `gh` on the host, so a task with many worktrees must not stampede it. */
 const PULL_REQUEST_LOOKUP_CONCURRENCY = 4;
 
+/** Mirrors the host's `environmentDiffPatchRequestSchema.paths` limit. */
+const REVIEW_DIFF_MAX_PATHS_PER_REQUEST = 50;
+const REVIEW_DIFF_BATCH_CONCURRENCY = 4;
+
 /**
  * Run `work` over every item with at most `limit` invocations in flight.
  * Results keep item order. Rejections propagate to the caller.
@@ -766,11 +770,16 @@ async function reviewEnvironment(
     if (sourceEnvironment) return sourceEnvironment;
   }
 
-  for (const taskThread of store.tasks.listTaskThreads(artifact.taskId)) {
-    const environment = await threadEnvironment(bb, taskThread.threadId);
-    if (environment) return environment;
-  }
-  return null;
+  const attachedEnvironments = await Promise.all(
+    store.tasks.listTaskThreads(artifact.taskId).map(async (taskThread) => ({
+      threadId: taskThread.threadId,
+      environmentId: await threadEnvironment(bb, taskThread.threadId),
+    })),
+  );
+  return (
+    attachedEnvironments.find((entry) => entry.environmentId)?.environmentId ??
+    null
+  );
 }
 
 async function getReviewDiff(
@@ -805,36 +814,62 @@ async function getReviewDiff(
     };
   }
 
-  let diff: Awaited<
-    ReturnType<BbPluginApi["sdk"]["environments"]["diffPatch"]>
-  >;
-  try {
-    diff = await bb.sdk.environments.diffPatch({
-      environmentId,
-      target: {
-        type: "branch_committed",
-        mergeBaseBranch: artifact.metadata.baseRef,
-      },
-      paths: reviewConcernPaths(artifact.metadata),
-    });
-  } catch (error) {
-    return {
-      outcome: "unavailable" as const,
-      reason: "diff_unavailable" as const,
-      message: errorMessage(error),
-    };
+  const paths = reviewConcernPaths(artifact.metadata);
+  let diffs: Array<
+    Awaited<
+      ReturnType<BbPluginApi["sdk"]["environments"]["diffPatch"]>
+    >
+  > = [];
+  if (paths.length > 0) {
+    const pathBatches: string[][] = [];
+    for (
+      let offset = 0;
+      offset < paths.length;
+      offset += REVIEW_DIFF_MAX_PATHS_PER_REQUEST
+    ) {
+      pathBatches.push(
+        paths.slice(offset, offset + REVIEW_DIFF_MAX_PATHS_PER_REQUEST),
+      );
+    }
+
+    try {
+      diffs = await mapWithConcurrency(
+        pathBatches,
+        REVIEW_DIFF_BATCH_CONCURRENCY,
+        async (batchPaths) =>
+          bb.sdk.environments.diffPatch({
+            environmentId,
+            target: {
+              type: "branch_committed",
+              mergeBaseBranch: artifact.metadata.baseRef,
+            },
+            paths: batchPaths,
+          }),
+      );
+    } catch (error) {
+      return {
+        outcome: "unavailable" as const,
+        reason: "diff_unavailable" as const,
+        message: errorMessage(error),
+      };
+    }
+
+    for (const diff of diffs) {
+      if (diff.outcome === "available") continue;
+      return {
+        outcome: "unavailable" as const,
+        reason: "diff_unavailable" as const,
+        message:
+          diff.outcome === "not_applicable"
+            ? diff.message
+            : diff.failure.message,
+      };
+    }
   }
 
-  if (diff.outcome !== "available") {
-    return {
-      outcome: "unavailable" as const,
-      reason: "diff_unavailable" as const,
-      message:
-        diff.outcome === "not_applicable"
-          ? diff.message
-          : diff.failure.message,
-    };
-  }
+  const files = diffs.flatMap((diff) =>
+    diff.outcome === "available" ? diff.patches : [],
+  );
 
   let currentHeadSha: string | null = null;
   try {
@@ -855,7 +890,7 @@ async function getReviewDiff(
     pinnedHeadSha: artifact.metadata.headSha,
     currentHeadSha,
     environmentId,
-    files: diff.patches,
+    files,
   };
 }
 

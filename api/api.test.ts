@@ -1752,6 +1752,174 @@ describe("Tasks RPC domain API", () => {
       await attached.harness.dispose();
     });
 
+    it("returns an empty available document without requesting a diff for zero concerns", async () => {
+      const diffPatch = vi.fn(async () => ({ outcome: "available", patches: [] }));
+      const { bb, harness } = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          environments: {
+            diffPatch,
+            status: async () => ({
+              outcome: "available",
+              workspace: {
+                checkout: { kind: "branch", headSha: "current-head" },
+              },
+            }),
+          },
+        },
+      });
+      const { store, task } = addTask(bb, harness);
+      const artifact = store.tasks.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Clean review",
+        metadata: {
+          ...reviewMetadata("env_empty"),
+          concerns: [],
+        },
+      });
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await harness.callRpc("getReviewDiff", { artifactId: artifact.id }),
+      );
+
+      expect(result).toEqual({
+        outcome: "available",
+        baseRef: "main",
+        pinnedHeadSha: "pinned-head",
+        currentHeadSha: "current-head",
+        environmentId: "env_empty",
+        files: [],
+      });
+      expect(diffPatch).not.toHaveBeenCalled();
+      await harness.dispose();
+    });
+
+    it("batches more than 50 cited paths and merges the patches in request order", async () => {
+      const paths = Array.from({ length: 51 }, (_, index) =>
+        `src/file-${index + 1}.ts`,
+      );
+      const diffPatch = vi.fn(
+        async ({ paths: requestedPaths }: { paths: string[] }) => ({
+          outcome: "available" as const,
+          patches: requestedPaths.map((path) => ({
+            path,
+            patch: `patch for ${path}`,
+            truncated: false,
+          })),
+        }),
+      );
+      const { bb, harness } = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: { environments: { diffPatch } },
+      });
+      const { store, task } = addTask(bb, harness);
+      const artifact = store.tasks.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Large review",
+        metadata: {
+          baseRef: "main",
+          headSha: "pinned-head",
+          environmentId: "env_many",
+          concerns: paths.map((path, index) => ({
+            title: `Concern ${index + 1}`,
+            why: "The cited range explains the behavior",
+            evidence: [],
+            decisions: [],
+            risks: "",
+            hunks: [{ path, startLine: 1, endLine: 1 }],
+          })),
+        },
+      });
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await harness.callRpc("getReviewDiff", { artifactId: artifact.id }),
+      );
+
+      expect(result).toEqual({
+        outcome: "available",
+        baseRef: "main",
+        pinnedHeadSha: "pinned-head",
+        currentHeadSha: null,
+        environmentId: "env_many",
+        files: paths.map((path) => ({
+          path,
+          patch: `patch for ${path}`,
+          truncated: false,
+        })),
+      });
+      expect(
+        harness
+          .sdk
+          .callsTo("environments.diffPatch")
+          .map(([input]) => (input as { paths: string[] }).paths),
+      ).toEqual([paths.slice(0, 50), paths.slice(50)]);
+      await harness.dispose();
+    });
+
+    it("resolves attached threads concurrently while selecting the first environment in task order", async () => {
+      const threadResolvers = new Map<
+        string,
+        (environmentId: string | null) => void
+      >();
+      const { bb, harness } = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          threads: {
+            get: ({ threadId }: { threadId: string }) =>
+              new Promise((resolve) => {
+                threadResolvers.set(threadId, (environmentId) =>
+                  resolve(makeThreadResponse({ id: threadId, environmentId })),
+                );
+              }),
+          },
+          environments: {
+            diffPatch: async () => ({ outcome: "available", patches: [] }),
+          },
+        },
+      });
+      const { store, task } = addTask(bb, harness);
+      const artifact = addReview(store, task.id, { environmentId: null });
+      for (const threadId of ["thr_first03", "thr_second03", "thr_none03"]) {
+        store.tasks.upsertTaskThread({
+          taskId: task.id,
+          threadId,
+          presetName: "Default",
+          title: "Attached",
+          liveStatus: "working",
+        });
+      }
+      const taskThreadOrder = store.tasks
+        .listTaskThreads(task.id)
+        .map((taskThread) => taskThread.threadId);
+      const [firstThreadId, secondThreadId, lastThreadId] = taskThreadOrder;
+      expect(firstThreadId).toBeDefined();
+      expect(secondThreadId).toBeDefined();
+      expect(lastThreadId).toBeDefined();
+
+      const resultPromise = harness.callRpc("getReviewDiff", {
+        artifactId: artifact.id,
+      });
+      await vi.waitFor(() => {
+        expect(threadResolvers.size).toBe(3);
+      });
+      threadResolvers.get(secondThreadId!)!("env_second");
+      threadResolvers.get(lastThreadId!)!(null);
+      threadResolvers.get(firstThreadId!)!("env_first");
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await resultPromise,
+      );
+
+      expect(result).toMatchObject({
+        outcome: "available",
+        environmentId: "env_first",
+      });
+      expect(harness.sdk.callsTo("threads.get")).toHaveLength(3);
+      await harness.dispose();
+    });
+
     it.each([
       ["not_a_review", "not_a_review"],
       ["artifact_not_found", "artifact_not_found"],
