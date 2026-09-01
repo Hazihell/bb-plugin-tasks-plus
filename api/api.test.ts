@@ -1557,6 +1557,310 @@ describe("Tasks RPC domain API", () => {
     await harness.dispose();
   });
 
+  describe("getReviewDiff", () => {
+    function reviewMetadata(environmentId: string | null) {
+      return {
+        baseRef: "main",
+        headSha: "pinned-head",
+        environmentId,
+        concerns: [
+          {
+            title: "First concern",
+            why: "The first cited range explains the behavior",
+            evidence: [],
+            decisions: [],
+            risks: "",
+            hunks: [{ path: "src/first.ts", startLine: 4, endLine: 8 }],
+          },
+          {
+            title: "Second concern",
+            why: "The second cited range explains the consequence",
+            evidence: [],
+            decisions: [],
+            risks: "",
+            hunks: [
+              { path: "src/first.ts", startLine: 20, endLine: 24 },
+              { path: "src/second.ts", startLine: 3, endLine: 5 },
+            ],
+          },
+        ],
+      };
+    }
+
+    function addReview(
+      store: ReturnType<typeof createStore>,
+      taskId: string,
+      options: { environmentId: string | null; sourceThreadId?: string },
+    ) {
+      return store.tasks.createTaskArtifact({
+        taskId,
+        kind: "review",
+        title: "Narrative review",
+        sourceThreadId: options.sourceThreadId,
+        metadata: reviewMetadata(options.environmentId),
+      });
+    }
+
+    function addTask(
+      bb: Parameters<typeof createStore>[0],
+      harness: ReturnType<typeof createFakePluginHost>["harness"],
+    ) {
+      const store = createStore(bb);
+      registerTasksApi(bb, store);
+      const project = store.tasks.createProject({
+        name: "Review diffs",
+        prefix: "RVD",
+        color: "blue",
+      });
+      const task = store.tasks.createTask({
+        projectId: project.id,
+        title: "Review a change",
+      });
+      return { harness, store, task };
+    }
+
+    it("prefers metadata, then source-thread, then attached-thread environments", async () => {
+      const metadataHost = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          threads: {
+            get: async ({ threadId }: { threadId: string }) =>
+              makeThreadResponse({
+                id: threadId,
+                environmentId: "env_source",
+              }),
+          },
+          environments: {
+            diffPatch: async () => ({ outcome: "available", patches: [] }),
+          },
+        },
+      });
+      const metadata = addTask(metadataHost.bb, metadataHost.harness);
+      const metadataArtifact = addReview(metadata.store, metadata.task.id, {
+        environmentId: "env_metadata",
+        sourceThreadId: "thr_source00",
+      });
+      metadata.store.tasks.upsertTaskThread({
+        taskId: metadata.task.id,
+        threadId: "thr_attached00",
+        presetName: "Default",
+        title: "Attached",
+        liveStatus: "working",
+      });
+      const metadataResult = tasksRpcContract.getReviewDiff.output.parse(
+        await metadata.harness.callRpc("getReviewDiff", {
+          artifactId: metadataArtifact.id,
+        }),
+      );
+      expect(metadataResult).toMatchObject({
+        outcome: "available",
+        environmentId: "env_metadata",
+      });
+      expect(
+        metadata.harness.sdk.callsTo("environments.diffPatch"),
+      ).toEqual([
+        [
+          {
+            environmentId: "env_metadata",
+            target: { type: "branch_committed", mergeBaseBranch: "main" },
+            paths: ["src/first.ts", "src/second.ts"],
+          },
+        ],
+      ]);
+      await metadata.harness.dispose();
+
+      const sourceHost = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          threads: {
+            get: async ({ threadId }: { threadId: string }) =>
+              makeThreadResponse({
+                id: threadId,
+                environmentId:
+                  threadId === "thr_source01" ? "env_source" : "env_attached",
+              }),
+          },
+          environments: {
+            diffPatch: async () => ({ outcome: "available", patches: [] }),
+          },
+        },
+      });
+      const source = addTask(sourceHost.bb, sourceHost.harness);
+      const sourceArtifact = addReview(source.store, source.task.id, {
+        environmentId: null,
+        sourceThreadId: "thr_source01",
+      });
+      source.store.tasks.upsertTaskThread({
+        taskId: source.task.id,
+        threadId: "thr_attached01",
+        presetName: "Default",
+        title: "Attached",
+        liveStatus: "working",
+      });
+      const sourceResult = tasksRpcContract.getReviewDiff.output.parse(
+        await source.harness.callRpc("getReviewDiff", {
+          artifactId: sourceArtifact.id,
+        }),
+      );
+      expect(sourceResult).toMatchObject({
+        outcome: "available",
+        environmentId: "env_source",
+      });
+      expect(source.harness.sdk.callsTo("threads.get")).toEqual([
+        [{ threadId: "thr_source01" }],
+      ]);
+      await source.harness.dispose();
+
+      const attachedHost = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          threads: {
+            get: async ({ threadId }: { threadId: string }) =>
+              makeThreadResponse({
+                id: threadId,
+                environmentId:
+                  threadId === "thr_attached02" ? "env_attached" : null,
+              }),
+          },
+          environments: {
+            diffPatch: async () => ({ outcome: "available", patches: [] }),
+          },
+        },
+      });
+      const attached = addTask(attachedHost.bb, attachedHost.harness);
+      const attachedArtifact = addReview(attached.store, attached.task.id, {
+        environmentId: null,
+      });
+      for (const threadId of ["thr_empty02", "thr_attached02", "thr_later02"]) {
+        attached.store.tasks.upsertTaskThread({
+          taskId: attached.task.id,
+          threadId,
+          presetName: "Default",
+          title: "Attached",
+          liveStatus: "working",
+        });
+      }
+      const attachedResult = tasksRpcContract.getReviewDiff.output.parse(
+        await attached.harness.callRpc("getReviewDiff", {
+          artifactId: attachedArtifact.id,
+        }),
+      );
+      expect(attachedResult).toMatchObject({
+        outcome: "available",
+        environmentId: "env_attached",
+      });
+      await attached.harness.dispose();
+    });
+
+    it.each([
+      ["not_a_review", "not_a_review"],
+      ["artifact_not_found", "artifact_not_found"],
+      ["no_environment", "no_environment"],
+    ] as const)("returns the %s reason", async (label, reason) => {
+      const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+      const { store, task } = addTask(bb, harness);
+      let artifactId: string;
+      if (reason === "not_a_review") {
+        artifactId = store.tasks.createTaskArtifact({
+          taskId: task.id,
+          kind: "evidence",
+          title: "Evidence",
+          metadata: {
+            command: "npm test",
+            exitCode: 0,
+            evidenceKind: "unit",
+          },
+        }).id;
+      } else if (reason === "artifact_not_found") {
+        const artifact = addReview(store, task.id, { environmentId: null });
+        store.tasks.deleteTaskArtifact(artifact.id);
+        artifactId = artifact.id;
+      } else {
+        artifactId = addReview(store, task.id, { environmentId: null }).id;
+      }
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await harness.callRpc("getReviewDiff", { artifactId }),
+      );
+      expect(result).toMatchObject({ outcome: "unavailable", reason });
+      await harness.dispose();
+    });
+
+    it.each([
+      ["not_applicable", "non-git workspace"],
+      ["unavailable", "permission denied"],
+      ["throws", "host disconnected"],
+    ] as const)("maps a diff %s to diff_unavailable with its message", async (
+      outcome,
+      message,
+    ) => {
+      const { bb, harness } = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          environments: {
+            diffPatch: async () => {
+              if (outcome === "throws") throw new Error(message);
+              if (outcome === "not_applicable") {
+                return {
+                  outcome,
+                  reason: "non_git_environment",
+                  message,
+                };
+              }
+              return { outcome, failure: { message } };
+            },
+          },
+        },
+      });
+      const { store, task } = addTask(bb, harness);
+      const artifact = addReview(store, task.id, { environmentId: "env_diff" });
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await harness.callRpc("getReviewDiff", { artifactId: artifact.id }),
+      );
+      expect(result).toEqual({
+        outcome: "unavailable",
+        reason: "diff_unavailable",
+        message,
+      });
+      await harness.dispose();
+    });
+
+    it("returns patches when status is unavailable and leaves the current head unknown", async () => {
+      const patch = "@@ -1 +1 @@\n-old\n+new\n";
+      const { bb, harness } = createFakePluginHost({
+        pluginId: "tasks",
+        sdk: {
+          environments: {
+            diffPatch: async () => ({
+              outcome: "available",
+              patches: [{ path: "src/first.ts", patch, truncated: false }],
+            }),
+            status: async () => ({
+              outcome: "unavailable",
+              failure: { message: "status unavailable" },
+            }),
+          },
+        },
+      });
+      const { store, task } = addTask(bb, harness);
+      const artifact = addReview(store, task.id, { environmentId: "env_status" });
+
+      const result = tasksRpcContract.getReviewDiff.output.parse(
+        await harness.callRpc("getReviewDiff", { artifactId: artifact.id }),
+      );
+      expect(result).toEqual({
+        outcome: "available",
+        baseRef: "main",
+        pinnedHeadSha: "pinned-head",
+        currentHeadSha: null,
+        environmentId: "env_status",
+        files: [{ path: "src/first.ts", patch, truncated: false }],
+      });
+      await harness.dispose();
+    });
+  });
+
   it("exposes blocker relations, list-row derivation, and API enforcement", async () => {
     const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
     const store = createStore(bb);

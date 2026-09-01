@@ -18,6 +18,7 @@ import {
 import { deliverCommentToLatestAgent } from "../steer";
 import { isSideChatShapedThread } from "../shared/side-chat";
 import { isBlockerResolved } from "../shared/blockers";
+import { reviewConcernPaths } from "../shared/review-diff";
 import {
   taskArtifactSchema,
   tasksRpcContract,
@@ -735,6 +736,129 @@ async function listTaskPullRequests(
   };
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function threadEnvironment(
+  bb: BbPluginApi,
+  threadId: string,
+): Promise<string | null> {
+  try {
+    return (await bb.sdk.threads.get({ threadId })).environmentId;
+  } catch {
+    return null;
+  }
+}
+
+async function reviewEnvironment(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  artifact: Extract<ApiTaskArtifact, { kind: "review" }>,
+): Promise<string | null> {
+  if (artifact.metadata.environmentId) return artifact.metadata.environmentId;
+
+  if (artifact.sourceThreadId) {
+    const sourceEnvironment = await threadEnvironment(
+      bb,
+      artifact.sourceThreadId,
+    );
+    if (sourceEnvironment) return sourceEnvironment;
+  }
+
+  for (const taskThread of store.tasks.listTaskThreads(artifact.taskId)) {
+    const environment = await threadEnvironment(bb, taskThread.threadId);
+    if (environment) return environment;
+  }
+  return null;
+}
+
+async function getReviewDiff(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  artifactId: string,
+) {
+  const storedArtifact = store.tasks.getTaskArtifact(artifactId);
+  if (!storedArtifact) {
+    return {
+      outcome: "unavailable" as const,
+      reason: "artifact_not_found" as const,
+      message: `Task artifact not found: ${artifactId}`,
+    };
+  }
+
+  const artifact = apiArtifact(storedArtifact);
+  if (artifact.kind !== "review") {
+    return {
+      outcome: "unavailable" as const,
+      reason: "not_a_review" as const,
+      message: `Task artifact is not a review: ${artifactId}`,
+    };
+  }
+
+  const environmentId = await reviewEnvironment(bb, store, artifact);
+  if (!environmentId) {
+    return {
+      outcome: "unavailable" as const,
+      reason: "no_environment" as const,
+      message: "No environment is available for this review",
+    };
+  }
+
+  let diff: Awaited<
+    ReturnType<BbPluginApi["sdk"]["environments"]["diffPatch"]>
+  >;
+  try {
+    diff = await bb.sdk.environments.diffPatch({
+      environmentId,
+      target: {
+        type: "branch_committed",
+        mergeBaseBranch: artifact.metadata.baseRef,
+      },
+      paths: reviewConcernPaths(artifact.metadata),
+    });
+  } catch (error) {
+    return {
+      outcome: "unavailable" as const,
+      reason: "diff_unavailable" as const,
+      message: errorMessage(error),
+    };
+  }
+
+  if (diff.outcome !== "available") {
+    return {
+      outcome: "unavailable" as const,
+      reason: "diff_unavailable" as const,
+      message:
+        diff.outcome === "not_applicable"
+          ? diff.message
+          : diff.failure.message,
+    };
+  }
+
+  let currentHeadSha: string | null = null;
+  try {
+    const status = await bb.sdk.environments.status({ environmentId });
+    if (status.outcome === "available") {
+      const checkout = status.workspace.checkout;
+      if (checkout.kind === "branch" || checkout.kind === "detached") {
+        currentHeadSha = checkout.headSha;
+      }
+    }
+  } catch {
+    // A patch is still useful when the host cannot answer the optional status check.
+  }
+
+  return {
+    outcome: "available" as const,
+    baseRef: artifact.metadata.baseRef,
+    pinnedHeadSha: artifact.metadata.headSha,
+    currentHeadSha,
+    environmentId,
+    files: diff.patches,
+  };
+}
+
 export function registerHandlers(
   bb: BbPluginApi,
   store: TasksApiStore,
@@ -1207,6 +1331,9 @@ export function registerHandlers(
     },
     async listTaskPullRequests(input) {
       return listTaskPullRequests(bb, store, input.taskId);
+    },
+    async getReviewDiff(input) {
+      return getReviewDiff(bb, store, input.artifactId);
     },
     createPreset(input) {
       const preset = store.tasks.createPreset({ ...input, builtin: false });

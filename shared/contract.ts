@@ -937,6 +937,41 @@ export const tasksRpcContract = defineRpcContract({
       })
       .strict(),
   },
+  getReviewDiff: {
+    input: z.object({ artifactId: idSchema }).strict(),
+    output: z.discriminatedUnion("outcome", [
+      z
+        .object({
+          outcome: z.literal("available"),
+          baseRef: nonBlankStringSchema,
+          pinnedHeadSha: nonBlankStringSchema,
+          currentHeadSha: nonBlankStringSchema.nullable(),
+          environmentId: z.string().startsWith("env_"),
+          files: z.array(
+            z
+              .object({
+                path: z.string(),
+                patch: z.string(),
+                truncated: z.boolean(),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+      z
+        .object({
+          outcome: z.literal("unavailable"),
+          reason: z.enum([
+            "not_a_review",
+            "artifact_not_found",
+            "no_environment",
+            "diff_unavailable",
+          ]),
+          message: z.string(),
+        })
+        .strict(),
+    ]),
+  },
   createPreset: {
     input: z
       .object({
