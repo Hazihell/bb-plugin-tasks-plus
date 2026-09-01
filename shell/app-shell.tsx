@@ -13,6 +13,7 @@ import { TasksTopbar } from "./topbar.js";
 import { ListView } from "../views/list/index.js";
 import { BoardView } from "../views/board/index.js";
 import { DetailView } from "../views/detail/index.js";
+import { ReviewView } from "../views/review/index.js";
 import { NewTaskDialog } from "../views/manage/new-task-dialog.js";
 import { NewProjectDialog } from "../views/manage/new-project-dialog.js";
 import { ManagePanel } from "../views/manage/manage-panel.js";
@@ -88,6 +89,10 @@ function RouteOutlet({
       return <ManagePanel />;
     case "task":
       return <DetailView taskKey={route.taskKey} />;
+    case "review":
+      return (
+        <ReviewView taskKey={route.taskKey} artifactId={route.artifactId} />
+      );
     case "project":
       return route.view === "board" && boardUsable ? (
         <BoardView projectId={route.projectId} />
@@ -147,7 +152,11 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
   // the user browses one this session (e.g. a deep-linked refresh).
   const lastBrowseRouteRef = useRef<TasksRoute | null>(null);
   useEffect(() => {
-    if (route.kind !== "task") lastBrowseRouteRef.current = route;
+    // Neither a task nor a review is a place to return *to*; both are what
+    // the back control returns *from*.
+    if (route.kind !== "task" && route.kind !== "review") {
+      lastBrowseRouteRef.current = route;
+    }
     // Routes are plain data; keying on subPath tracks every route change.
   }, [subPath]);
   const backFromTask = () =>
@@ -208,7 +217,10 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
           onBack={backFromTask}
         />
         <div className="min-h-0 flex-1 overflow-auto">
-          {noProjects && route.kind !== "task" && route.kind !== "manage" ? (
+          {noProjects &&
+          route.kind !== "task" &&
+          route.kind !== "review" &&
+          route.kind !== "manage" ? (
             <NoProjectsEmptyState
               onNewProject={() => setNewProjectOpen(true)}
             />
