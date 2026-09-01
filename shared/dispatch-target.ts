@@ -11,6 +11,8 @@
  * answer with a promise, so resolution is asynchronous for both.
  */
 
+import { walkTaskAncestry } from "./task-ancestry";
+
 /** The parts of a task the resolver reads while walking its ancestry. */
 export interface DispatchTargetTask {
   id: string;
@@ -67,29 +69,19 @@ export interface DispatchTargetScopes {
 export async function resolveDispatchTarget(
   scopes: DispatchTargetScopes,
 ): Promise<DispatchTargetResolution> {
-  const seen = new Set<string>();
-  let current: DispatchTargetTask | undefined | null = scopes.task;
-  let isSelf = true;
-  while (current && !seen.has(current.id)) {
-    if (current.dispatchBbProjectId !== null) {
-      return isSelf
-        ? {
-            bbProjectId: current.dispatchBbProjectId,
-            scope: "task",
-            ancestorKey: null,
-          }
-        : {
-            bbProjectId: current.dispatchBbProjectId,
-            scope: "ancestor",
-            ancestorKey: current.key,
-          };
-    }
-    seen.add(current.id);
-    isSelf = false;
-    current =
-      current.parentTaskId === null
-        ? undefined
-        : await scopes.getTask(current.parentTaskId);
+  const match = await walkTaskAncestry(
+    scopes.task,
+    scopes.getTask,
+    (task) => task.dispatchBbProjectId,
+  );
+  if (match !== null) {
+    return match.isSelf
+      ? { bbProjectId: match.value, scope: "task", ancestorKey: null }
+      : {
+          bbProjectId: match.value,
+          scope: "ancestor",
+          ancestorKey: match.task.key,
+        };
   }
   if (scopes.project.linkedBbProjectId !== null) {
     return {
