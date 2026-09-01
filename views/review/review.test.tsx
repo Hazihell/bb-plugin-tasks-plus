@@ -160,14 +160,37 @@ describe("review route", () => {
     expect(slot.container.textContent).toContain("main..aaaaaaa");
   });
 
+  it("keeps the toolbar and each file header free to stick", async () => {
+    const slot = openReview(reviewRpc());
+
+    const fallback = await slot.findByText(/\+const two = 2;/);
+    const fileHeader = slot.getByText("shared/patch-slice.ts").parentElement!;
+    expect(fileHeader.className).toContain("sticky");
+    // A sticky element sticks to its nearest scrolling ancestor. The route's
+    // own scroll area must be the first one found: anything that clips in
+    // between would pin the header to a box that never scrolls.
+    let scroller: HTMLElement | null = null;
+    for (
+      let element: HTMLElement | null = fileHeader.parentElement;
+      element !== null && scroller === null;
+      element = element.parentElement
+    ) {
+      expect(element.className).not.toMatch(/\boverflow-hidden\b/);
+      if (/\boverflow-(auto|scroll)\b/.test(element.className)) {
+        scroller = element;
+      }
+    }
+    expect(scroller).not.toBeNull();
+    // The patch itself may clip; it is below the header, not above it.
+    expect(fallback.closest(".overflow-hidden")).not.toBeNull();
+  });
+
   it("wraps every diff at once and remembers the choice", async () => {
     const slot = openReview(reviewRpc());
 
     const fallback = await slot.findByText(/\+const two = 2;/);
     // Sideways panning is possible, so the host's sidebar swipe is refused.
-    expect(
-      fallback.closest("[data-no-sidebar-swipe]"),
-    ).not.toBeNull();
+    expect(fallback.closest("[data-no-sidebar-swipe]")).not.toBeNull();
     expect(fallback.className).toContain("overflow-x-auto");
 
     fireEvent.click(slot.getByRole("button", { name: /Wrap lines/ }));

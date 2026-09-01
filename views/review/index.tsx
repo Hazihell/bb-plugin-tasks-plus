@@ -111,6 +111,26 @@ function ReviewNarrative({ body }: { body: string }) {
 }
 
 /**
+ * The toolbar for the patches below it. It sticks because the control it
+ * carries is only wanted once a long diff is on screen, which is exactly when
+ * the top of the document has scrolled away.
+ *
+ * Its height is fixed rather than measured: each file header sticks directly
+ * under it, and a shared constant is cheaper than telling one element how tall
+ * another turned out to be.
+ */
+function DiffToolbar({ range }: { range: string }) {
+  return (
+    <div className="sticky top-0 z-20 -mx-8 flex h-10 items-center justify-between gap-3 border-b border-border-hairline bg-background px-8">
+      <span className="truncate font-mono text-xs text-muted-foreground">
+        {range}
+      </span>
+      <WordWrapToggle />
+    </div>
+  );
+}
+
+/**
  * Wrapping is one setting for every diff on the screen, so the control sits
  * with the document rather than repeating on each file.
  */
@@ -220,21 +240,18 @@ function ReviewDocument({
     return `No patches are shown: ${reason}. ${result.message}`;
   })();
 
+  const range = `${review.metadata.baseRef}..${review.metadata.headSha.slice(
+    0,
+    SHORT_SHA_LENGTH,
+  )}`;
+
   return (
-    <div className="mx-auto w-full max-w-5xl px-8 py-8">
-      <header>
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold leading-tight">
-              {review.title}
-            </h1>
-            <p className="mt-1.5 font-mono text-xs text-muted-foreground">
-              {review.metadata.baseRef}..
-              {review.metadata.headSha.slice(0, SHORT_SHA_LENGTH)}
-            </p>
-          </div>
-          <WordWrapToggle />
-        </div>
+    // No scrolling ancestor between the toolbar, the file headers and the
+    // route's own scroll area: a sticky element sticks to the nearest
+    // scroller, so an overflow of any kind in here would pin it to nothing.
+    <div className="mx-auto w-full max-w-5xl px-8 pb-8">
+      <header className="pt-8">
+        <h1 className="text-2xl font-semibold leading-tight">{review.title}</h1>
         {stale ? (
           <p className="mt-3 flex gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-destructive">
             <Icon name="AlertTriangle" className="mt-0.5 size-4 shrink-0" />
@@ -257,6 +274,7 @@ function ReviewDocument({
           </p>
         ) : null}
       </header>
+      <DiffToolbar range={range} />
       {review.metadata.concerns.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">
           This review raised no concerns.

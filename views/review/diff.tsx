@@ -68,10 +68,16 @@ export function ConcernDiff({
     // sidebar instead of panning the code. Claim the gesture while the code
     // can scroll; hand it back once wrapping means there is nowhere to pan.
     <div
-      className="mt-3 overflow-hidden rounded-md border border-border"
+      // Not `overflow-hidden`: the header below sticks to the route's scroll
+      // area, and any overflow here would make it stick to this box instead.
+      className="mt-3 rounded-md border border-border"
       {...(wrap ? {} : { "data-no-sidebar-swipe": "" })}
     >
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-border-hairline bg-card px-3 py-1.5">
+      <div
+        // Directly under the document's toolbar, and clipped by this card, so
+        // the file name follows its own patch and no further.
+        className="sticky top-10 z-10 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-t-md border-b border-border-hairline bg-card px-3 py-1.5"
+      >
         <span className="font-mono text-xs">{path}</span>
         {droppedHunks > 0 ? (
           <span className="text-2xs text-muted-foreground">
@@ -85,29 +91,33 @@ export function ConcernDiff({
           </span>
         ) : null}
       </div>
-      {file ? (
-        <FileDiff
-          fileDiff={file}
-          options={{
-            diffStyle: "unified",
-            stickyHeader: false,
-            disableFileHeader: true,
-            overflow: wrap ? "wrap" : "scroll",
-            ...(theme === undefined ? {} : { theme }),
-          }}
-        />
-      ) : (
-        // Unhighlighted, but complete: better a plain patch than a blank box.
-        <pre
-          className={
-            wrap
-              ? "whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
-              : "overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed"
-          }
-        >
-          {sliced.patch}
-        </pre>
-      )}
+      {/* Rounding the card's bottom corners is this wrapper's whole job; the
+          header above must stay outside any clipping box to keep sticking. */}
+      <div className="overflow-hidden rounded-b-md">
+        {file ? (
+          <FileDiff
+            fileDiff={file}
+            options={{
+              diffStyle: "unified",
+              stickyHeader: false,
+              disableFileHeader: true,
+              overflow: wrap ? "wrap" : "scroll",
+              ...(theme === undefined ? {} : { theme }),
+            }}
+          />
+        ) : (
+          // Unhighlighted, but complete: better a plain patch than a blank box.
+          <pre
+            className={
+              wrap
+                ? "whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
+                : "overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed"
+            }
+          >
+            {sliced.patch}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }
