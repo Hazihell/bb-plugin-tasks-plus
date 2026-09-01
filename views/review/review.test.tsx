@@ -160,6 +160,32 @@ describe("review route", () => {
     expect(slot.container.textContent).toContain("main..aaaaaaa");
   });
 
+  it("wraps every diff at once and remembers the choice", async () => {
+    const slot = openReview(reviewRpc());
+
+    const fallback = await slot.findByText(/\+const two = 2;/);
+    // Sideways panning is possible, so the host's sidebar swipe is refused.
+    expect(
+      fallback.closest("[data-no-sidebar-swipe]"),
+    ).not.toBeNull();
+    expect(fallback.className).toContain("overflow-x-auto");
+
+    fireEvent.click(slot.getByRole("button", { name: /Wrap lines/ }));
+
+    expect(fallback.className).toContain("whitespace-pre-wrap");
+    // Nothing to pan any more, so the swipe belongs to the sidebar again.
+    expect(fallback.closest("[data-no-sidebar-swipe]")).toBeNull();
+    expect(window.localStorage.getItem("bb-tasks:diff-word-wrap")).toBe("true");
+  });
+
+  it("starts wrapped when the stored preference says so", async () => {
+    window.localStorage.setItem("bb-tasks:diff-word-wrap", "true");
+    const slot = openReview(reviewRpc());
+
+    const fallback = await slot.findByText(/\+const two = 2;/);
+    expect(fallback.className).toContain("whitespace-pre-wrap");
+  });
+
   it("shows the patch as text when the diff renderer parses no file", async () => {
     const slot = openReview(reviewRpc());
 

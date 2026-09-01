@@ -6,6 +6,7 @@ import {
   sliceUnifiedPatch,
   type PatchLineRange,
 } from "../../shared/patch-slice.js";
+import { useDiffWordWrap } from "../../shell/diff-preference.js";
 
 /**
  * The host publishes the code themes it renders its own diffs with on the
@@ -57,10 +58,19 @@ export function ConcernDiff({
     }
   }, [sliced.patch]);
   const theme = hostCodeTheme();
+  const [wrap] = useDiffWordWrap();
   const droppedHunks = sliced.totalHunks - sliced.keptHunks;
 
   return (
-    <div className="mt-3 overflow-hidden rounded-md border border-border">
+    // The host opens its sidebar on a rightward swipe unless the gesture
+    // starts inside something that scrolls sideways. It cannot see into the
+    // diff's own scroller, so a touch drag across a hunk would open the
+    // sidebar instead of panning the code. Claim the gesture while the code
+    // can scroll; hand it back once wrapping means there is nowhere to pan.
+    <div
+      className="mt-3 overflow-hidden rounded-md border border-border"
+      {...(wrap ? {} : { "data-no-sidebar-swipe": "" })}
+    >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-border-hairline bg-card px-3 py-1.5">
         <span className="font-mono text-xs">{path}</span>
         {droppedHunks > 0 ? (
@@ -82,12 +92,19 @@ export function ConcernDiff({
             diffStyle: "unified",
             stickyHeader: false,
             disableFileHeader: true,
+            overflow: wrap ? "wrap" : "scroll",
             ...(theme === undefined ? {} : { theme }),
           }}
         />
       ) : (
         // Unhighlighted, but complete: better a plain patch than a blank box.
-        <pre className="overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed">
+        <pre
+          className={
+            wrap
+              ? "whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
+              : "overflow-x-auto px-3 py-2 font-mono text-xs leading-relaxed"
+          }
+        >
           {sliced.patch}
         </pre>
       )}

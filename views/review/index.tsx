@@ -6,6 +6,7 @@ import type {
 } from "../../shared/contract.js";
 import { isReviewStale } from "../../shared/review-diff.js";
 import { useTasksQuery } from "../../shell/data.js";
+import { useDiffWordWrap } from "../../shell/diff-preference.js";
 import {
   ConcernSection,
   type ReviewArtifact,
@@ -109,6 +110,30 @@ function ReviewNarrative({ body }: { body: string }) {
   );
 }
 
+/**
+ * Wrapping is one setting for every diff on the screen, so the control sits
+ * with the document rather than repeating on each file.
+ */
+function WordWrapToggle() {
+  const [wrap, setWrap] = useDiffWordWrap();
+  return (
+    <button
+      type="button"
+      aria-pressed={wrap}
+      className={
+        "flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs " +
+        (wrap
+          ? "bg-secondary text-foreground"
+          : "text-muted-foreground hover:text-foreground")
+      }
+      onClick={() => setWrap(!wrap)}
+    >
+      <Icon name="TextWrap" className="size-3.5 shrink-0" />
+      Wrap lines
+    </button>
+  );
+}
+
 function ReviewDocument({
   task,
   artifactId,
@@ -198,11 +223,18 @@ function ReviewDocument({
   return (
     <div className="mx-auto w-full max-w-5xl px-8 py-8">
       <header>
-        <h1 className="text-2xl font-semibold leading-tight">{review.title}</h1>
-        <p className="mt-1.5 font-mono text-xs text-muted-foreground">
-          {review.metadata.baseRef}..
-          {review.metadata.headSha.slice(0, SHORT_SHA_LENGTH)}
-        </p>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold leading-tight">
+              {review.title}
+            </h1>
+            <p className="mt-1.5 font-mono text-xs text-muted-foreground">
+              {review.metadata.baseRef}..
+              {review.metadata.headSha.slice(0, SHORT_SHA_LENGTH)}
+            </p>
+          </div>
+          <WordWrapToggle />
+        </div>
         {stale ? (
           <p className="mt-3 flex gap-2 rounded-md border border-border bg-card px-3 py-2 text-sm text-destructive">
             <Icon name="AlertTriangle" className="mt-0.5 size-4 shrink-0" />
