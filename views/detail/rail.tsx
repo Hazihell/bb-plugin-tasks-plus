@@ -29,6 +29,11 @@ import {
 import { DispatchControl } from "./threads.js";
 import { defaultDispatchPreset, useLastPresetId } from "./last-preset.js";
 import { describeBaseBranchOrigin } from "./base-branch-source.js";
+import { describeDispatchTargetOrigin } from "./dispatch-target-source.js";
+import {
+  resolveDispatchTarget,
+  type DispatchTargetResolution,
+} from "../../shared/dispatch-target.js";
 import {
   resolveBaseBranch,
   type BaseBranchResolution,
@@ -71,6 +76,7 @@ export interface TaskPropertyUpdate {
   priority?: TaskPriority;
   dueDate?: string | null;
   baseBranch?: string | null;
+  dispatchBbProjectId?: string | null;
   labelIds?: string[];
 }
 
@@ -355,61 +361,48 @@ function LabelsMenu({
 }
 
 /**
- * Editable "Dispatch target" row: shows the linked bb project (or an invite
- * to link one) and opens a picker that saves via updateProject. The rail's
- * project data is subscribed to projects:changed, so the row refreshes as
- * soon as the save publishes.
- *
- * The link is the only project-wide setting the rail writes; everything else
- * about a project — including its base branch — is configured in the manage
- * panel's Projects tab.
+ * The rail's dispatch-target row. It reads the bb project a dispatch would
+ * actually spawn into and names the scope it came from; the only thing it
+ * writes is the task's own target. The project's own link is configured
+ * where it lives, in the manage panel's project dialog.
  */
 function DispatchTargetMenu({
-  project,
+  task,
+  /** Undefined until the ancestry walk behind the resolution has answered. */
+  readout,
+  /** What the task would fall back to if it named no target of its own. */
+  inherited,
   bbProjects,
-  onError,
+  onUpdate,
   triggerClassName,
 }: {
-  project: Project;
+  task: Task;
+  readout: DispatchTargetResolution | undefined;
+  inherited: DispatchTargetResolution | undefined;
   bbProjects: readonly BbProjectOption[];
-  onError: (message: string) => void;
+  onUpdate: (update: TaskPropertyUpdate) => void;
   triggerClassName: string;
 }) {
-  const rpc = useTasksRpc();
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<BbProjectLinkState>(
     emptyBbProjectLinkState,
   );
-  const [saving, setSaving] = useState(false);
-  const linkedBbProjectId = project.linkedBbProjectId;
-  const linkedName = bbProjects.find(
-    (candidate) => candidate.id === linkedBbProjectId,
-  )?.name;
-  const resolved = resolveBbProjectLink(state);
-
-  const save = async (linkedId: string | null) => {
-    if (saving) return;
-    setSaving(true);
-    try {
-      await rpc.call("updateProject", {
-        projectId: project.id,
-        linkedBbProjectId: linkedId,
-      });
-      setOpen(false);
-    } catch (saveError) {
-      onError(
-        saveError instanceof Error ? saveError.message : String(saveError),
-      );
-    } finally {
-      setSaving(false);
-    }
+  // listBbProjects only knows the workspace's current projects; a target it
+  // cannot name still has to read as something, so the id stands in.
+  const nameFor = (bbProjectId: string) =>
+    bbProjects.find((candidate) => candidate.id === bbProjectId)?.name ??
+    bbProjectId;
+  const attribution =
+    readout === undefined ? null : describeDispatchTargetOrigin(readout);
+  const save = (next: string | null) => {
+    onUpdate({ dispatchBbProjectId: next });
+    setOpen(false);
   };
-
   return (
     <Popover
       open={open}
       onOpenChange={(next) => {
-        if (next) setState(bbProjectLinkStateFor(linkedBbProjectId));
+        if (next) setState(bbProjectLinkStateFor(task.dispatchBbProjectId));
         setOpen(next);
       }}
     >
@@ -420,35 +413,60 @@ function DispatchTargetMenu({
           className={triggerClassName}
         >
           <Icon name="ArrowUpRight" className="size-3.5 shrink-0" />
-          {linkedBbProjectId !== null ? (
-            <span className="truncate" title={linkedBbProjectId}>
-              {linkedName ?? linkedBbProjectId}
-            </span>
-          ) : (
+          {readout === undefined ? (
+            <span className="truncate text-muted-foreground">…</span>
+          ) : readout.bbProjectId === null ? (
             <span className="truncate text-muted-foreground">
               Link a bb project…
+            </span>
+          ) : (
+            <span
+              className={cn(
+                "min-w-0 truncate",
+                readout.scope === "task" ? undefined : "text-muted-foreground",
+              )}
+              title={
+                attribution === null
+                  ? readout.bbProjectId
+                  : `${readout.bbProjectId} · ${attribution}`
+              }
+            >
+              {nameFor(readout.bbProjectId)}
+              {attribution === null ? null : (
+                <span className="text-2xs"> · {attribution}</span>
+              )}
             </span>
           )}
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-3">
+        <div className="mb-1 text-2xs font-semibold text-muted-foreground">
+          Dispatch target
+        </div>
         <BbProjectLinkPicker
           state={state}
           onStateChange={setState}
           bbProjects={bbProjects}
-          noneLabel={linkedBbProjectId !== null ? "Unlink" : "Not linked"}
+          noneLabel="Inherit"
+          ariaLabel="Task dispatch target"
         />
+        <p className="mt-1.5 text-2xs text-muted-foreground">
+          {inherited === undefined
+            ? "Resolving where inheriting lands…"
+            : inherited.bbProjectId === null
+              ? "Inheriting lands on no bb project — dispatch has nowhere to spawn."
+              : `Inheriting lands on ${nameFor(inherited.bbProjectId)} — ${describeDispatchTargetOrigin(inherited)}.`}
+        </p>
         <div className="mt-2.5 flex items-center justify-between gap-2">
-          {linkedBbProjectId !== null ? (
+          {task.dispatchBbProjectId !== null ? (
             <Button
               variant="ghost"
               size="sm"
               className="h-7 text-muted-foreground"
-              disabled={saving}
-              onClick={() => void save(null)}
+              onClick={() => save(null)}
             >
               <Icon name="X" className="size-3.5" />
-              Unlink
+              Inherit
             </Button>
           ) : (
             <span />
@@ -456,8 +474,10 @@ function DispatchTargetMenu({
           <Button
             size="sm"
             className="h-7"
-            disabled={saving}
-            onClick={() => void save(resolved === "" ? null : resolved)}
+            onClick={() => {
+              const resolved = resolveBbProjectLink(state);
+              save(resolved === "" ? null : resolved);
+            }}
           >
             Save
           </Button>
@@ -650,6 +670,38 @@ export function PropertiesRail({
       dispatchPreset?.baseBranch,
     ],
   );
+  // The same shape as the base-branch read-out, over the dispatch's own
+  // resolver: one cached getTask per id, and both answers off one walk.
+  const dispatchTarget = useTasksQuery(
+    async (query) => {
+      const fetched = new Map<string, Task | null>();
+      const getTask = async (taskId: string) => {
+        const cached = fetched.get(taskId);
+        if (cached !== undefined) return cached;
+        const { task: ancestor } = await query.call("getTask", { taskId });
+        fetched.set(taskId, ancestor);
+        return ancestor;
+      };
+      const scopes = {
+        project: { linkedBbProjectId: project?.linkedBbProjectId ?? null },
+        getTask,
+      };
+      return {
+        resolved: await resolveDispatchTarget({ ...scopes, task }),
+        inherited: await resolveDispatchTarget({
+          ...scopes,
+          task: { ...task, dispatchBbProjectId: null },
+        }),
+      };
+    },
+    ["tasks:changed"],
+    [
+      task.id,
+      task.parentTaskId,
+      task.dispatchBbProjectId,
+      project?.linkedBbProjectId,
+    ],
+  );
   return (
     <aside className={cn("w-56 shrink-0 py-10 pl-2 pr-6", className)}>
       <h2 className="mb-1.5 text-xs font-semibold text-muted-foreground">
@@ -696,16 +748,14 @@ export function PropertiesRail({
       <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
         Dispatch target
       </div>
-      {project !== undefined ? (
-        <DispatchTargetMenu
-          project={project}
-          bbProjects={bbProjects.data ?? []}
-          onError={onError}
-          triggerClassName={RAIL_ROW_CLASS}
-        />
-      ) : (
-        <div className="py-0.5 text-sm text-muted-foreground">…</div>
-      )}
+      <DispatchTargetMenu
+        task={task}
+        readout={dispatchTarget.data?.resolved}
+        inherited={dispatchTarget.data?.inherited}
+        bbProjects={bbProjects.data ?? []}
+        onUpdate={onUpdate}
+        triggerClassName={RAIL_ROW_CLASS}
+      />
 
       <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
         Base branch

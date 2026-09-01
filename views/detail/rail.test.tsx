@@ -25,6 +25,7 @@ afterEach(cleanup);
 
 const PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP1";
 const BB_PROJECT_ID = "proj_bb0000000000000000000001";
+const OTHER_BB_PROJECT_ID = "proj_bb0000000000000000000002";
 const PARENT_TASK_ID = "01HZZZZZZZZZZZZZZZZZZZZZT1";
 
 function projectRow(
@@ -56,6 +57,7 @@ const task = {
   dueDate: null,
   parentTaskId: null,
   baseBranch: null,
+  dispatchBbProjectId: null,
   position: 1,
   createdAt: "2026-07-15T00:00:00.000Z",
   updatedAt: "2026-07-15T00:00:00.000Z",
@@ -88,78 +90,37 @@ function detailRpc(
 }
 
 describe("dispatch target rail control", () => {
-  it("links a discovered bb project", async () => {
-    const updateCalls: Array<Record<string, unknown>> = [];
-    const slot = renderSlot(
-      app.navPanels[0]!,
-      { subPath: "task/TSK-5" },
-      {
-        rpc: detailRpc(null, {
-          listBbProjects: () => ({
-            bbProjects: [{ id: BB_PROJECT_ID, name: "bb monorepo" }],
-          }),
-          updateProject: (input: Record<string, unknown>) => {
-            updateCalls.push(input);
-            return {
-              project: {
-                ...projectRow(input.linkedBbProjectId as string | null),
-              },
-            };
-          },
-        }),
-      },
-    );
-    fireEvent.click(
-      await slot.findByRole("button", { name: "Edit dispatch target" }),
-    );
-    fireEvent.click(await slot.findByLabelText("Linked bb project"));
-    fireEvent.click(await slot.findByRole("option", { name: "bb monorepo" }));
-    fireEvent.click(slot.getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(updateCalls).toHaveLength(1));
-    // The rail writes the link and nothing else — a project's base branch is
-    // set in the manage panel.
-    expect(updateCalls[0]).toEqual({
-      projectId: PROJECT_ID,
-      linkedBbProjectId: BB_PROJECT_ID,
-    });
-  });
-
-  it("shows the linked bb project's name and unlinks it", async () => {
-    const updateCalls: Array<Record<string, unknown>> = [];
+  it("reads the task's own target and attributes it to the task", async () => {
+    const owned = { ...task, dispatchBbProjectId: OTHER_BB_PROJECT_ID };
     const slot = renderSlot(
       app.navPanels[0]!,
       { subPath: "task/TSK-5" },
       {
         rpc: detailRpc(BB_PROJECT_ID, {
           listBbProjects: () => ({
-            bbProjects: [{ id: BB_PROJECT_ID, name: "bb monorepo" }],
+            bbProjects: [
+              { id: BB_PROJECT_ID, name: "bb monorepo" },
+              { id: OTHER_BB_PROJECT_ID, name: "bb sandbox" },
+            ],
           }),
-          updateProject: (input: Record<string, unknown>) => {
-            updateCalls.push(input);
-            return {
-              project: {
-                ...projectRow(input.linkedBbProjectId as string | null),
-              },
-            };
-          },
+          getTaskByKey: () => ({ task: owned }),
+          listTasks: (input: { parentTaskId?: string } | null) =>
+            input?.parentTaskId ? { tasks: [] } : { tasks: [owned] },
         }),
       },
     );
     const trigger = await slot.findByRole("button", {
       name: "Edit dispatch target",
     });
-    await slot.findByText("bb monorepo");
-
-    fireEvent.click(trigger);
-    fireEvent.click(await slot.findByRole("button", { name: "Unlink" }));
-    await waitFor(() => expect(updateCalls).toHaveLength(1));
-    expect(updateCalls[0]).toEqual({
-      projectId: PROJECT_ID,
-      linkedBbProjectId: null,
-    });
+    // The project names one too; the task's own wins and says so.
+    await waitFor(() => expect(trigger.textContent).toContain("bb sandbox"));
+    expect(trigger.textContent).toContain("from this task");
+    expect(slot.getByText(/bb sandbox/).className).not.toContain(
+      "text-muted-foreground",
+    );
   });
 
-  it("no longer offers the project's base branch", async () => {
+  it("reads an inherited target muted, attributed to the project", async () => {
     const slot = renderSlot(
       app.navPanels[0]!,
       { subPath: "task/TSK-5" },
@@ -171,11 +132,115 @@ describe("dispatch target rail control", () => {
         }),
       },
     );
+    const trigger = await slot.findByRole("button", {
+      name: "Edit dispatch target",
+    });
+    await waitFor(() => expect(trigger.textContent).toContain("bb monorepo"));
+    expect(trigger.textContent).toContain("from the project");
+    expect(slot.getByText(/bb monorepo/).className).toContain(
+      "text-muted-foreground",
+    );
+  });
+
+  it("attributes an inherited target to the ancestor that names it", async () => {
+    const parentTask = {
+      ...task,
+      id: PARENT_TASK_ID,
+      number: 1,
+      key: "TSK-1",
+      title: "Redesign epic",
+      dispatchBbProjectId: OTHER_BB_PROJECT_ID,
+    };
+    const child = { ...task, parentTaskId: PARENT_TASK_ID };
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc(BB_PROJECT_ID, {
+          listBbProjects: () => ({ bbProjects: [] }),
+          getTaskByKey: () => ({ task: child }),
+          listTasks: (input: { parentTaskId?: string } | null) =>
+            input?.parentTaskId ? { tasks: [] } : { tasks: [child] },
+          getTask: (input: { taskId: string }) => ({
+            task: input.taskId === PARENT_TASK_ID ? parentTask : null,
+          }),
+        }),
+      },
+    );
+    const trigger = await slot.findByRole("button", {
+      name: "Edit dispatch target",
+    });
+    // listBbProjects knows no name for it, so the id stands in.
+    await waitFor(() =>
+      expect(trigger.textContent).toContain(OTHER_BB_PROJECT_ID),
+    );
+    expect(trigger.textContent).toContain("from TSK-1");
+  });
+
+  it("invites a link when no scope names a bb project", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      { rpc: detailRpc(null) },
+    );
+    const trigger = await slot.findByRole("button", {
+      name: "Edit dispatch target",
+    });
+    await waitFor(() =>
+      expect(trigger.textContent).toContain("Link a bb project…"),
+    );
+  });
+
+  it("saves the task's own target and clears it back to inherited", async () => {
+    const updateTaskCalls: Array<Record<string, unknown>> = [];
+    const updateProjectCalls: Array<Record<string, unknown>> = [];
+    const owned = { ...task, dispatchBbProjectId: OTHER_BB_PROJECT_ID };
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc(BB_PROJECT_ID, {
+          listBbProjects: () => ({
+            bbProjects: [
+              { id: BB_PROJECT_ID, name: "bb monorepo" },
+              { id: OTHER_BB_PROJECT_ID, name: "bb sandbox" },
+            ],
+          }),
+          getTaskByKey: () => ({ task: owned }),
+          listTasks: (input: { parentTaskId?: string } | null) =>
+            input?.parentTaskId ? { tasks: [] } : { tasks: [owned] },
+          updateTask: (input: Record<string, unknown>) => {
+            updateTaskCalls.push(input);
+            return { ok: true, task: owned };
+          },
+          updateProject: (input: Record<string, unknown>) => {
+            updateProjectCalls.push(input);
+            return { project: projectRow(BB_PROJECT_ID) };
+          },
+        }),
+      },
+    );
+
     fireEvent.click(
       await slot.findByRole("button", { name: "Edit dispatch target" }),
     );
-    await slot.findByLabelText("Linked bb project");
-    expect(slot.queryByLabelText("Project base branch")).toBeNull();
+    fireEvent.click(await slot.findByLabelText("Task dispatch target"));
+    fireEvent.click(await slot.findByRole("option", { name: "bb monorepo" }));
+    fireEvent.click(slot.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateTaskCalls).toHaveLength(1));
+    expect(updateTaskCalls[0]).toMatchObject({
+      dispatchBbProjectId: BB_PROJECT_ID,
+    });
+
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Edit dispatch target" }),
+    );
+    fireEvent.click(await slot.findByRole("button", { name: "Inherit" }));
+    await waitFor(() => expect(updateTaskCalls).toHaveLength(2));
+    expect(updateTaskCalls[1]).toMatchObject({ dispatchBbProjectId: null });
+
+    // The project's link is the manage panel's business now.
+    expect(updateProjectCalls).toEqual([]);
   });
 });
 
