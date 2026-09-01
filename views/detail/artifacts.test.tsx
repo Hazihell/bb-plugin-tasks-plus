@@ -28,6 +28,7 @@ const TASK_ID = "01HZZZZZZZZZZZZZZZZZZZZZT5";
 const PLAN_ID = "01HZZZZZZZZZZZZZZZZZZZZZA1";
 const OLD_DECISION_ID = "01HZZZZZZZZZZZZZZZZZZZZZA2";
 const NEW_DECISION_ID = "01HZZZZZZZZZZZZZZZZZZZZZA3";
+const REVIEW_ID = "01HZZZZZZZZZZZZZZZZZZZZZA4";
 
 const task = {
   id: TASK_ID,
@@ -78,6 +79,24 @@ function decision(id: string, title: string, createdAt: string) {
     createdAt,
   };
 }
+
+const review = {
+  id: REVIEW_ID,
+  taskId: TASK_ID,
+  kind: "review",
+  title: "Narrative review",
+  body: "Read it as a document.",
+  externalUrl: null,
+  attachmentId: null,
+  sourceThreadId: null,
+  metadata: {
+    baseRef: "main",
+    headSha: "abc1234",
+    environmentId: null,
+    concerns: [],
+  },
+  createdAt: "2026-07-15T12:00:00.000Z",
+};
 
 function detailRpc(overrides: Record<string, unknown> = {}) {
   return {
@@ -182,5 +201,56 @@ describe("task detail artifacts section", () => {
 
     await slot.findByText("Read the engineering record");
     expect(slot.queryByText("Artifacts")).toBeNull();
+  });
+});
+
+describe("artifact review launcher", () => {
+  const withReview = () =>
+    detailRpc({
+      listArtifacts: () => ({
+        artifacts: [
+          decision(
+            OLD_DECISION_ID,
+            "Older decision",
+            "2026-07-15T10:00:00.000Z",
+          ),
+          approvedPlan,
+          review,
+        ],
+      }),
+    });
+
+  it("navigates to the review route for that exact artifact", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      { rpc: withReview() },
+    );
+
+    const open = await slot.findByRole("button", {
+      name: "Open review Narrative review",
+    });
+    fireEvent.click(open);
+    expect(slot.navigateCalls).toContainEqual({
+      method: "toPluginPanel",
+      path: "tasks",
+      options: { subPath: `review/TSK-5/${REVIEW_ID}` },
+    });
+  });
+
+  it("leaves rows of other kinds without the control", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      { rpc: withReview() },
+    );
+
+    await slot.findByText("Narrative review");
+    expect(
+      slot.queryByRole("button", {
+        name: "Open review Approved implementation plan",
+      }),
+    ).toBeNull();
+    expect(slot.getAllByText("Open review")).toHaveLength(1);
   });
 });

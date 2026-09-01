@@ -72,8 +72,10 @@ function taskDetailRpc(getTaskByKey: () => { task: typeof task }) {
 
 describe("Tasks app slots", () => {
   it("registers the task directive card and thread panel action", () => {
-    expect(app.messageDirectives).toHaveLength(1);
-    expect(app.messageDirectives[0]?.id).toBe("task");
+    expect(app.messageDirectives.map((entry) => entry.id)).toEqual([
+      "task",
+      "review",
+    ]);
     expect(app.threadPanelActions[0]).toMatchObject({
       id: "task",
       title: "Task",
@@ -275,6 +277,64 @@ describe("Task directive card", () => {
       projectId: PROJECT_ID,
     });
     await slot.findByText("Ship task embeds");
+  });
+});
+
+describe("Review directive card", () => {
+  const reviewDirective = (attributes: Record<string, string>) => ({
+    ...directiveProps(attributes),
+    source: `::review{task="${attributes.task ?? ""}"}`,
+  });
+  const card = () => app.messageDirectives[1]!;
+
+  it("opens the task's newest review in the Tasks panel", async () => {
+    const slot = renderSlot(card(), reviewDirective({ task: "TSK-4" }), {
+      rpc: { getTaskByKey: () => ({ task }) },
+    });
+
+    const main = await slot.findByRole("button", {
+      name: "Review of TSK-4 — Ship task embeds — open in Tasks",
+    });
+    fireEvent.click(main);
+    expect(slot.navigateCalls).toContainEqual({
+      method: "toPluginPanel",
+      path: "tasks",
+      options: { subPath: "review/TSK-4" },
+    });
+    expect(slot.rpcCalls).toContainEqual({
+      method: "getTaskByKey",
+      input: { taskKey: "TSK-4" },
+    });
+  });
+
+  it("opens the same route from the arrow", async () => {
+    const slot = renderSlot(card(), reviewDirective({ task: "TSK-4" }), {
+      rpc: { getTaskByKey: () => ({ task }) },
+    });
+    fireEvent.click(
+      await slot.findByRole("button", { name: "Open TSK-4 review in Tasks" }),
+    );
+    expect(slot.navigateCalls).toContainEqual({
+      method: "toPluginPanel",
+      path: "tasks",
+      options: { subPath: "review/TSK-4" },
+    });
+  });
+
+  it("reuses the task card's notice for malformed or missing keys", () => {
+    for (const attributes of [{}, { task: "  " }, { task: "not a key" }]) {
+      const slot = renderSlot(card(), reviewDirective(attributes), { rpc: {} });
+      slot.getByText("Invalid task link. Expected a task key like TSK-4.");
+      expect(slot.rpcCalls).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  it("reuses the not-found row when the task is gone", async () => {
+    const slot = renderSlot(card(), reviewDirective({ task: "TSK-9" }), {
+      rpc: { getTaskByKey: () => ({ task: null }) },
+    });
+    await slot.findByText("Task not found — deleted, or its key changed");
   });
 });
 

@@ -6,6 +6,7 @@ import {
   TASK_ARTIFACT_KIND_LABELS,
 } from "../../shared/artifact-manifest.js";
 import { TasksEditor } from "../../editor/tasks-editor.js";
+import { useTasksNavigation } from "../../shell/routes.js";
 import { attachmentDownloadUrl } from "./attachments.js";
 import { formatRelativeTime } from "./meta.js";
 import { Icon } from "@/components/ui/icon";
@@ -15,8 +16,15 @@ import { Icon } from "@/components/ui/icon";
  * the rich narrative renderer is a separate concern — so a record with no body
  * simply expands to nothing.
  */
-function ArtifactRow({ artifact }: { artifact: TaskArtifact }) {
+function ArtifactRow({
+  artifact,
+  taskKey,
+}: {
+  artifact: TaskArtifact;
+  taskKey: string;
+}) {
   const [open, setOpen] = useState(false);
+  const navigation = useTasksNavigation();
   const href = artifact.externalUrl
     ? artifact.externalUrl
     : artifact.attachmentId
@@ -44,6 +52,22 @@ function ArtifactRow({ artifact }: { artifact: TaskArtifact }) {
             {formatRelativeTime(artifact.createdAt)}
           </time>
         </button>
+        {artifact.kind === "review" ? (
+          <button
+            type="button"
+            aria-label={`Open review ${artifact.title}`}
+            className="shrink-0 rounded-sm px-1 py-px text-2xs font-semibold text-muted-foreground hover:bg-state-hover hover:text-foreground"
+            onClick={() =>
+              navigation.go({
+                kind: "review",
+                taskKey,
+                artifactId: artifact.id,
+              })
+            }
+          >
+            Open review
+          </button>
+        ) : null}
         {href ? (
           <UrlLink
             href={href}
@@ -73,7 +97,13 @@ function ArtifactRow({ artifact }: { artifact: TaskArtifact }) {
 /** The task's engineering record, grouped by kind and newest first — the same
  *  order the seed prompt's manifest uses. Read-only: artifacts are written by
  *  agents through the CLI, so there is no add or delete affordance here. */
-export function ArtifactsSection({ artifacts }: { artifacts: TaskArtifact[] }) {
+export function ArtifactsSection({
+  artifacts,
+  taskKey,
+}: {
+  artifacts: TaskArtifact[];
+  taskKey: string;
+}) {
   if (artifacts.length === 0) return null;
   return (
     <section className="mt-6">
@@ -81,7 +111,7 @@ export function ArtifactsSection({ artifacts }: { artifacts: TaskArtifact[] }) {
         Artifacts
       </div>
       {orderArtifactsByKindThenNewest(artifacts).map((artifact) => (
-        <ArtifactRow key={artifact.id} artifact={artifact} />
+        <ArtifactRow key={artifact.id} artifact={artifact} taskKey={taskKey} />
       ))}
     </section>
   );
