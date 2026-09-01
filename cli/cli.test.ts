@@ -2437,7 +2437,7 @@ describe("bb tasks-plus CLI", () => {
     expect(result).toEqual({
       exitCode: 1,
       stdout: "",
-      stderr: 'Task project "Unlinked CLI" is not linked to a bb project',
+      stderr: "No dispatch target resolved for task UNL-1",
     });
     // "delegate" stays as a hidden compatibility alias for "dispatch".
     const aliased = await harness.runCli([
@@ -2447,7 +2447,7 @@ describe("bb tasks-plus CLI", () => {
       "CLI worker",
     ]);
     expect(aliased.stderr).toBe(
-      'Task project "Unlinked CLI" is not linked to a bb project',
+      "No dispatch target resolved for task UNL-1",
     );
     expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
 
