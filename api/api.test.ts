@@ -2514,7 +2514,7 @@ describe("Tasks RPC domain API", () => {
       }
     });
 
-    it("records a non-approval but reports no target when none is selected", async () => {
+    it("keeps the drafts and writes nothing when no target is selected", async () => {
       const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
       const { store, task } = addTask(bb);
       const review = addReview(store, task.id);
@@ -2525,6 +2525,10 @@ describe("Tasks RPC domain API", () => {
           anchor: { anchor: "file", path: "src/save.ts" },
           body: "There is a concern, but no worker is selected.",
         });
+        await harness.callRpc("saveReviewDraftSummary", {
+          reviewArtifactId: review.id,
+          body: "This must survive a round that cannot go out.",
+        });
         const result = tasksRpcContract.submitReviewFeedback.output.parse(
           await harness.callRpc("submitReviewFeedback", {
             reviewArtifactId: review.id,
@@ -2534,16 +2538,60 @@ describe("Tasks RPC domain API", () => {
         expect(result).toEqual({
           outcome: "failed",
           reason: "no_target_thread",
-          message: expect.stringContaining("recorded"),
+          message: expect.stringContaining("Nothing was recorded"),
         });
         expect(harness.sdk.callsTo("threads.send")).toEqual([]);
         expect(store.tasks.listTaskArtifacts(task.id)).toEqual([
           expect.objectContaining({ kind: "review" }),
-          expect.objectContaining({
-            kind: "review_feedback",
-            metadata: expect.objectContaining({ targetThreadId: null }),
-          }),
         ]);
+        await expect(
+          harness.callRpc("listReviewDrafts", {
+            reviewArtifactId: review.id,
+          }),
+        ).resolves.toMatchObject({
+          summary: "This must survive a round that cannot go out.",
+          comments: [
+            expect.objectContaining({
+              body: "There is a concern, but no worker is selected.",
+            }),
+          ],
+        });
+      } finally {
+        await harness.dispose();
+      }
+    });
+
+    it("keeps the drafts when the chosen thread is not attached to the task", async () => {
+      const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+      const { store, task } = addTask(bb);
+      const review = addReview(store, task.id);
+
+      try {
+        await harness.callRpc("saveReviewDraftComment", {
+          reviewArtifactId: review.id,
+          anchor: { anchor: "file", path: "src/save.ts" },
+          body: "The worker for this was detached.",
+        });
+        const result = tasksRpcContract.submitReviewFeedback.output.parse(
+          await harness.callRpc("submitReviewFeedback", {
+            reviewArtifactId: review.id,
+            verdict: "request_changes",
+            target: { kind: "existing", threadId: "thr_detached" },
+          }),
+        );
+        expect(result).toEqual({
+          outcome: "failed",
+          reason: "no_target_thread",
+          message: expect.stringContaining(
+            "thr_detached is not attached to task RND-1",
+          ),
+        });
+        expect(store.tasks.listTaskArtifacts(task.id)).toEqual([
+          expect.objectContaining({ kind: "review" }),
+        ]);
+        expect(
+          store.tasks.listReviewDraftComments(review.id),
+        ).toHaveLength(1);
       } finally {
         await harness.dispose();
       }
@@ -2586,6 +2634,11 @@ describe("Tasks RPC domain API", () => {
       const review = addReview(store, task.id, "thr_reviewing_no_env");
 
       try {
+        await harness.callRpc("saveReviewDraftComment", {
+          reviewArtifactId: review.id,
+          anchor: { anchor: "file", path: "src/save.ts" },
+          body: "The environment is gone.",
+        });
         const result = tasksRpcContract.submitReviewFeedback.output.parse(
           await harness.callRpc("submitReviewFeedback", {
             reviewArtifactId: review.id,
@@ -2597,23 +2650,22 @@ describe("Tasks RPC domain API", () => {
           outcome: "failed",
           reason: "spawn_failed",
           message: expect.stringContaining(
-            "reviewing thread is gone or has no environment",
+            "reviewing thread has no environment",
           ),
         });
         expect(harness.sdk.callsTo("threads.spawn")).toEqual([]);
         expect(store.tasks.listTaskArtifacts(task.id)).toEqual([
           expect.objectContaining({ kind: "review" }),
-          expect.objectContaining({
-            kind: "review_feedback",
-            metadata: expect.objectContaining({ targetThreadId: null }),
-          }),
+        ]);
+        expect(store.tasks.listReviewDraftComments(review.id)).toEqual([
+          expect.objectContaining({ body: "The environment is gone." }),
         ]);
       } finally {
         await harness.dispose();
       }
     });
 
-    it("spawns new feedback threads from the reviewing thread's preset and environment", async () => {
+    it("delivers a spawned round as the new thread's opening prompt", async () => {
       const { bb, harness } = createFakePluginHost({
         pluginId: "tasks",
         sdk: {
@@ -2652,6 +2704,11 @@ describe("Tasks RPC domain API", () => {
       const review = addReview(store, task.id, "thr_reviewing");
 
       try {
+        await harness.callRpc("saveReviewDraftComment", {
+          reviewArtifactId: review.id,
+          anchor: { anchor: "file", path: "src/save.ts" },
+          body: "Carry this into the new thread.",
+        });
         const result = tasksRpcContract.submitReviewFeedback.output.parse(
           await harness.callRpc("submitReviewFeedback", {
             reviewArtifactId: review.id,
@@ -2682,7 +2739,87 @@ describe("Tasks RPC domain API", () => {
           presetName: preset.name,
           liveStatus: "starting",
         });
-        expect(harness.sdk.callsTo("threads.send")).toHaveLength(1);
+        // One delivery: the round is the prompt, never a follow-up message.
+        const [[spawnInput]] = harness.sdk.callsTo("threads.spawn") as [
+          [{ prompt: string }],
+        ];
+        expect(spawnInput.prompt).toContain("# Review feedback for RND-1");
+        expect(spawnInput.prompt).toContain("Carry this into the new thread.");
+        expect(harness.sdk.callsTo("threads.send")).toEqual([]);
+      } finally {
+        await harness.dispose();
+      }
+    });
+
+    it("moves a saved draft comment to another anchor", async () => {
+      const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+      const { store, task } = addTask(bb);
+      const review = addReview(store, task.id);
+
+      try {
+        const first = tasksRpcContract.saveReviewDraftComment.output.parse(
+          await harness.callRpc("saveReviewDraftComment", {
+            reviewArtifactId: review.id,
+            anchor: { anchor: "file", path: "src/save.ts" },
+            body: "This belongs on the write, not the file.",
+          }),
+        );
+        const moved = tasksRpcContract.saveReviewDraftComment.output.parse(
+          await harness.callRpc("saveReviewDraftComment", {
+            id: first.comment.id,
+            reviewArtifactId: review.id,
+            anchor: {
+              anchor: "lines",
+              path: "src/write.ts",
+              side: "additions",
+              startLine: 4,
+              endLine: 5,
+              quotedLines: ["+  await write(input);", "+  return result;"],
+            },
+            body: "This belongs on the write, not the file.",
+          }),
+        );
+        expect(moved.comment).toMatchObject({
+          id: first.comment.id,
+          anchor: {
+            anchor: "lines",
+            path: "src/write.ts",
+            side: "additions",
+            startLine: 4,
+            endLine: 5,
+            quotedLines: ["+  await write(input);", "+  return result;"],
+          },
+        });
+        expect(
+          store.tasks.getReviewDraftComment(first.comment.id)?.anchor,
+        ).toMatchObject({ anchor: "lines", path: "src/write.ts" });
+      } finally {
+        await harness.dispose();
+      }
+    });
+
+    it("keeps draft writes off the realtime channel", async () => {
+      const { bb, harness } = createFakePluginHost({ pluginId: "tasks" });
+      const { store, task } = addTask(bb);
+      const review = addReview(store, task.id);
+
+      try {
+        harness.realtimeSignals.length = 0;
+        const saved = tasksRpcContract.saveReviewDraftComment.output.parse(
+          await harness.callRpc("saveReviewDraftComment", {
+            reviewArtifactId: review.id,
+            anchor: { anchor: "file", path: "src/save.ts" },
+            body: "Typing must not make the task refetch.",
+          }),
+        );
+        await harness.callRpc("saveReviewDraftSummary", {
+          reviewArtifactId: review.id,
+          body: "Nor must the summary box.",
+        });
+        await harness.callRpc("deleteReviewDraftComment", {
+          id: saved.comment.id,
+        });
+        expect(harness.realtimeSignals).toEqual([]);
       } finally {
         await harness.dispose();
       }

@@ -33,6 +33,29 @@ function groupHunksByPath(concern: ReviewConcern): PathHunks[] {
 }
 
 /**
+ * Which concern speaks for each file's whole-file remarks: the first one that
+ * cites it. A review's concerns overlap by design — the same file can matter
+ * to two of them — but a remark about the file is about the file, so it is
+ * drawn under the concern that reached it first and nowhere else.
+ *
+ * One set per concern, in the order they were given.
+ */
+export function assignFileComments(
+  concerns: readonly ReviewConcern[],
+): ReadonlySet<string>[] {
+  const claimed = new Set<string>();
+  return concerns.map((concern) => {
+    const mine = new Set<string>();
+    for (const hunk of concern.hunks) {
+      if (claimed.has(hunk.path)) continue;
+      claimed.add(hunk.path);
+      mine.add(hunk.path);
+    }
+    return mine;
+  });
+}
+
+/**
  * A cited artifact, resolved against the task's own record. Citations are
  * written by an agent and artifacts are never rewritten, so an id that does
  * not resolve is a stale reference, not an error worth a reader's attention.
@@ -76,6 +99,12 @@ interface ConcernSectionProps {
   patches: ReadonlyMap<string, ReviewPatch> | null;
   /** Every unsent comment on this review; each diff card claims its own. */
   comments: readonly ReviewDraftComment[];
+  /**
+   * The files whose whole-file remarks this section draws. A file cited by
+   * several concerns is named by exactly one of them, so such a remark is
+   * written and read in one place instead of once per concern.
+   */
+  fileCommentPaths: ReadonlySet<string>;
   actions: ReviewCommentActions;
 }
 
@@ -85,6 +114,7 @@ export function ConcernSection({
   artifacts,
   patches,
   comments,
+  fileCommentPaths,
   actions,
 }: ConcernSectionProps) {
   const groups = groupHunksByPath(concern);
@@ -130,6 +160,7 @@ export function ConcernSection({
                 ranges={group.ranges}
                 truncated={found.truncated}
                 comments={comments}
+                ownsFileComments={fileCommentPaths.has(group.path)}
                 actions={actions}
               />
             );

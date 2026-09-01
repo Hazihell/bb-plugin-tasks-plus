@@ -306,7 +306,10 @@ const MIGRATIONS = [
       CHECK (source_thread_id IS NULL OR source_thread_id GLOB 'thr_*')
     );
 
-    INSERT INTO task_artifacts_new
+    INSERT INTO task_artifacts_new (
+      id, task_id, kind, title, body, external_url, attachment_id,
+      source_thread_id, metadata_json, created_at
+    )
       SELECT id, task_id, kind, title, body, external_url, attachment_id,
              source_thread_id, metadata_json, created_at
       FROM task_artifacts;

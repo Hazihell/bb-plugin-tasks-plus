@@ -90,22 +90,21 @@ export function SubmitPanel({
   const [failure, setFailure] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
 
-  // The review's own thread is the default, but only once it is known to be
-  // one of the task's — an unattached thread is not on offer here. Derived
-  // rather than seeded into state: the threads arrive after the first paint,
-  // and a default written on their arrival would land on top of a choice the
-  // reviewer had already made.
+  // The review's own thread is the default, and the only one: any other
+  // preselection would read as a decision nobody made, and a round can be
+  // sent to an agent that never touched the work. When the reviewing thread
+  // is not among the task's, the reviewer has to say where this goes.
+  //
+  // Derived rather than seeded into state: the threads arrive after the first
+  // paint, and a default written on their arrival would land on top of a
+  // choice the reviewer had already made.
   const attached = threads.data ?? [];
+  const reviewingThread =
+    attached.find((thread) => thread.threadId === sourceThreadId) ?? null;
   const preselected: Target | null =
-    attached.length === 0
+    reviewingThread === null
       ? null
-      : {
-          kind: "existing",
-          threadId: (
-            attached.find((thread) => thread.threadId === sourceThreadId) ??
-            attached[0]!
-          ).threadId,
-        };
+      : { kind: "existing", threadId: reviewingThread.threadId };
   const target = chosen ?? preselected;
 
   const submit = async () => {
@@ -142,11 +141,12 @@ export function SubmitPanel({
 
   const unsent = drafts.comments.length;
   // An approval is a record and stands on its own; anything that gets sent to
-  // a thread has to actually say something.
+  // a thread has to actually say something, and has to know where it goes.
   const nothingToSay =
     verdict !== "approve" &&
     unsent === 0 &&
     drafts.summary.trim().length === 0;
+  const nowhereToSend = verdict !== "approve" && target === null;
 
   return (
     <section className="mt-8 border-t border-border-hairline pt-6">
@@ -237,6 +237,8 @@ export function SubmitPanel({
                 {thread.title || thread.presetName}
               </span>
               {thread.threadId === sourceThreadId ? (
+                // The one thread that is on offer by default, so the reason it
+                // is preselected is said where the choice is made.
                 <span className="shrink-0 text-2xs text-muted-foreground">
                   wrote this review
                 </span>
@@ -264,7 +266,7 @@ export function SubmitPanel({
         <Button
           type="button"
           size="sm"
-          disabled={busy || nothingToSay}
+          disabled={busy || nothingToSay || nowhereToSend}
           onClick={() => void submit()}
         >
           Submit review
@@ -272,6 +274,11 @@ export function SubmitPanel({
         {nothingToSay ? (
           <span className="text-xs text-muted-foreground">
             A round needs at least one comment or an overall note.
+          </span>
+        ) : null}
+        {nowhereToSend && !nothingToSay ? (
+          <span className="text-xs text-muted-foreground">
+            Choose where this round goes.
           </span>
         ) : null}
         {sent ? (

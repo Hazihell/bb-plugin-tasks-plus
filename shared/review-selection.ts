@@ -110,17 +110,24 @@ function rowIndexAt(
   return null;
 }
 
+/** Answers "does this patch draw that line?" without re-reading the patch. */
+export type PatchLineDrawer = (side: PatchSide, lineNumber: number) => boolean;
+
 /**
- * Whether this patch draws that line at all. A comment is shown where its
- * lines are shown, and a review's patches are sliced per concern, so the same
- * file can be on screen twice with only one of the two showing the line.
+ * Read one patch, then answer for any number of lines.
+ *
+ * A comment is shown where its lines are shown, and a review's patches are
+ * sliced per concern, so the same file can be on screen twice with only one
+ * of the two showing the line — which is a question asked once per comment,
+ * over a patch that does not change between the asking.
  */
-export function patchDrawsLine(
-  patch: string,
-  side: PatchSide,
-  lineNumber: number,
-): boolean {
-  return rowIndexAt(readPatchRows(patch), lineNumber, side) !== null;
+export function patchLineDrawer(patch: string): PatchLineDrawer {
+  const drawn = new Set<string>();
+  for (const row of readPatchRows(patch)) {
+    if (row.newLine !== null) drawn.add(`additions:${row.newLine}`);
+    if (row.oldLine !== null) drawn.add(`deletions:${row.oldLine}`);
+  }
+  return (side, lineNumber) => drawn.has(`${side}:${lineNumber}`);
 }
 
 /**

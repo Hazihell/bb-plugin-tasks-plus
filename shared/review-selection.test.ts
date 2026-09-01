@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   anchorFromPatchSelection,
-  patchDrawsLine,
+  patchLineDrawer,
 } from "./review-selection.js";
 
 const patch = `diff --git a/src/example.ts b/src/example.ts
@@ -189,14 +189,21 @@ describe("anchorFromPatchSelection", () => {
   });
 });
 
-describe("patchDrawsLine", () => {
-  it("finds a line on the side that numbers it", () => {
-    expect(patchDrawsLine(patch, "additions", 11)).toBe(true);
-    expect(patchDrawsLine(patch, "deletions", 2)).toBe(true);
+describe("patchLineDrawer", () => {
+  it("answers for every line of a patch it read once", () => {
+    const draws = patchLineDrawer(patch);
+
+    expect(draws("additions", 11)).toBe(true);
+    expect(draws("deletions", 2)).toBe(true);
+    // The same reading answers the lines the slice left out.
+    expect(draws("additions", 7)).toBe(false);
+    expect(draws("deletions", 7)).toBe(false);
   });
 
-  it("does not find a line the slice left out", () => {
-    expect(patchDrawsLine(patch, "additions", 7)).toBe(false);
-    expect(patchDrawsLine(patch, "deletions", 7)).toBe(false);
+  it("draws a context line on both sides at once", () => {
+    const draws = patchLineDrawer(patch);
+
+    expect(draws("additions", 10)).toBe(true);
+    expect(draws("deletions", 10)).toBe(true);
   });
 });

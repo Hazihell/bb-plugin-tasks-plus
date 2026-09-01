@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 
 // loadPluginApp installs the fake SDK runtime; nothing SDK-touching may be
 // imported before it runs.
 const app = await loadPluginApp(() => import("../../app"));
+// Imported after the runtime is installed, for the same reason app.tsx is.
+const { useHostCodeTheme } = await import("./diff.js");
 
 afterEach(cleanup);
 
@@ -183,6 +185,28 @@ describe("review route", () => {
     expect(scroller).not.toBeNull();
     // The patch itself may clip; it is below the header, not above it.
     expect(fallback.closest(".overflow-hidden")).not.toBeNull();
+  });
+
+  it("keeps the review inside the width of a phone", async () => {
+    const originalWidth = window.innerWidth;
+    window.innerWidth = 390;
+    const slot = openReview(reviewRpc());
+
+    const toolbar = (await slot.findByRole("button", { name: /Wrap lines/ }))
+      .parentElement!;
+    expect(toolbar.className).toContain("sticky");
+    // At this width the document has no centring slack, so anything reaching
+    // outside its parent's content box between here and the scroller is
+    // wider than the scroller: the whole page would pan sideways and this
+    // bar's left edge would be cut off.
+    for (
+      let element: HTMLElement | null = toolbar;
+      element !== null && !/\boverflow-(auto|scroll)\b/.test(element.className);
+      element = element.parentElement
+    ) {
+      expect(element.className).not.toMatch(/(^|\s)-m[a-z]?-/);
+    }
+    window.innerWidth = originalWidth;
   });
 
   it("wraps every diff at once and remembers the choice", async () => {
@@ -433,6 +457,45 @@ const lineDraft = {
   updatedAt: "2026-07-15T11:00:00.000Z",
 };
 
+const FILE_DRAFT_ID = "01HZZZZZZZZZZZZZZZZZZZZZC2";
+
+const fileDraft = {
+  id: FILE_DRAFT_ID,
+  reviewArtifactId: REVIEW_ID,
+  anchor: { anchor: "file", path: "shared/patch-slice.ts" },
+  body: "This file does two jobs",
+  createdAt: "2026-07-15T11:00:00.000Z",
+  updatedAt: "2026-07-15T11:00:00.000Z",
+};
+
+/** Two concerns that both cite the one file the diff returns. */
+const twiceCitedReview = reviewArtifact({
+  sourceThreadId: THREAD_ID,
+  metadata: {
+    baseRef: "main",
+    headSha: PINNED_SHA,
+    environmentId: "env_abc",
+    concerns: [
+      {
+        title: "The first concern about this file",
+        why: "It cites lines 1 to 4.",
+        evidence: [],
+        decisions: [],
+        risks: "",
+        hunks: [{ path: "shared/patch-slice.ts", startLine: 1, endLine: 4 }],
+      },
+      {
+        title: "The second concern about the same file",
+        why: "It cites the same lines again.",
+        evidence: [],
+        decisions: [],
+        risks: "",
+        hunks: [{ path: "shared/patch-slice.ts", startLine: 1, endLine: 4 }],
+      },
+    ],
+  },
+});
+
 function taskThread(threadId: string, title: string) {
   return {
     id: `01HZZZZZZZZZZZZZZZZZZZZT${threadId.length}`,
@@ -551,6 +614,35 @@ describe("review comments", () => {
     );
   });
 
+  it("draws a remark about a file once, however many concerns cite it", async () => {
+    const slot = openReview(
+      answerableRpc({
+        listArtifacts: () => ({ artifacts: [twiceCitedReview] }),
+        listReviewDrafts: () => ({ comments: [fileDraft], summary: "" }),
+      }),
+    );
+
+    // Both concerns are on screen, so both cards for the file are too.
+    await slot.findByText("The second concern about the same file");
+    // The remark is about the file, not about either concern's lines: one
+    // card carries it, with one pair of controls over it.
+    // The submit panel lists it too, so count only the cards: the body, and
+    // the one pair of controls over it.
+    await waitFor(() =>
+      expect(
+        slot.getAllByText("This file does two jobs", { selector: "p" }),
+      ).toHaveLength(1),
+    );
+    expect(slot.getAllByLabelText("Edit comment")).toHaveLength(1);
+    expect(slot.getAllByLabelText("Discard comment")).toHaveLength(1);
+    // And one place to write the next one, for the same reason.
+    expect(
+      slot.getAllByRole("button", {
+        name: "Comment on shared/patch-slice.ts",
+      }),
+    ).toHaveLength(1);
+  });
+
   it("keeps an unsent comment editable and discardable", async () => {
     const slot = openReview(
       answerableRpc({
@@ -583,6 +675,50 @@ describe("review comments", () => {
         input: { id: DRAFT_ID },
       }),
     );
+  });
+});
+
+/** Records what the hook handed back on each render. */
+function ThemeProbe({
+  seen,
+}: {
+  seen: ReturnType<typeof useHostCodeTheme>[];
+}) {
+  seen.push(useHostCodeTheme());
+  return null;
+}
+
+describe("the code theme the diffs are rendered with", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.bbCodeThemeDark;
+    delete document.documentElement.dataset.bbCodeThemeLight;
+  });
+
+  it("is the same pair until the host publishes a different one", () => {
+    document.documentElement.dataset.bbCodeThemeDark = "night";
+    document.documentElement.dataset.bbCodeThemeLight = "day";
+    const seen: ReturnType<typeof useHostCodeTheme>[] = [];
+
+    const probe = render(<ThemeProbe seen={seen} />);
+    probe.rerender(<ThemeProbe seen={seen} />);
+
+    // Everything the diff renderer is configured with hangs off this object,
+    // so a new one each render is a rebuilt configuration each render.
+    expect(seen[1]).toBe(seen[0]);
+
+    document.documentElement.dataset.bbCodeThemeDark = "midnight";
+    probe.rerender(<ThemeProbe seen={seen} />);
+
+    expect(seen[2]).toEqual({ dark: "midnight", light: "day" });
+    expect(seen[2]).not.toBe(seen[1]);
+  });
+
+  it("is nothing at all when the host published no themes", () => {
+    const seen: ReturnType<typeof useHostCodeTheme>[] = [];
+
+    render(<ThemeProbe seen={seen} />);
+
+    expect(seen[0]).toBeUndefined();
   });
 });
 
@@ -714,6 +850,54 @@ describe("submitting a round", () => {
     await slot.findByText(/Sent\./);
   });
 
+  it("preselects the thread that wrote the review, and says which it is", async () => {
+    const slot = openReview(withOneDraft());
+
+    const reviewer = await slot.findByRole("button", {
+      name: /The reviewing thread/,
+    });
+    expect(reviewer.getAttribute("aria-pressed")).toBe("true");
+    expect(reviewer.textContent).toContain("wrote this review");
+    const other = slot.getByRole("button", { name: /A second thread/ });
+    expect(other.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("picks no thread at all when the review's own is not attached", async () => {
+    const slot = openReview(
+      withOneDraft({
+        // The reviewing thread is gone from the task; only a stranger is left.
+        listTaskThreads: () => ({
+          taskThreads: [taskThread(OTHER_THREAD_ID, "A second thread")],
+        }),
+      }),
+    );
+
+    const other = await slot.findByRole("button", { name: /A second thread/ });
+    // Nothing is chosen, because nothing here is the obvious choice: sending
+    // to a thread that never touched the work must be someone's decision.
+    expect(other.getAttribute("aria-pressed")).toBe("false");
+    const submit = (await slot.findByRole("button", {
+      name: "Submit review",
+    })) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    slot.getByText("Choose where this round goes.");
+
+    fireEvent.click(other);
+
+    await waitFor(() => expect(submit.disabled).toBe(false));
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "submitReviewFeedback",
+        input: {
+          reviewArtifactId: REVIEW_ID,
+          verdict: "comment",
+          target: { kind: "existing", threadId: OTHER_THREAD_ID },
+        },
+      }),
+    );
+  });
+
   it("asks for no thread when the verdict is an approval", async () => {
     const slot = openReview(
       withOneDraft({
@@ -762,14 +946,28 @@ describe("submitting a round", () => {
     );
   });
 
+  /**
+   * A server that empties the drafts when — and only when — a round actually
+   * goes out. Asserting that they survived a failed send is worth nothing
+   * against a stub that could not have deleted them either way.
+   */
+  const submittingRpc = (result: Record<string, unknown>) => {
+    let comments: unknown[] = [lineDraft];
+    return answerableRpc({
+      listReviewDrafts: () => ({ comments, summary: "" }),
+      submitReviewFeedback: () => {
+        if (result.outcome === "submitted") comments = [];
+        return result;
+      },
+    });
+  };
+
   it("keeps the reviewer's place when the send fails", async () => {
     const slot = openReview(
-      withOneDraft({
-        submitReviewFeedback: () => ({
-          outcome: "failed",
-          reason: "send_failed",
-          message: "The thread is archived.",
-        }),
+      submittingRpc({
+        outcome: "failed",
+        reason: "send_failed",
+        message: "The thread is archived.",
       }),
     );
 
@@ -777,9 +975,55 @@ describe("submitting a round", () => {
 
     await slot.findByText(/the thread would not take the message/);
     slot.getByText("The thread is archived.", { exact: false });
+    // Ask the server again rather than trusting the paint: the question is
+    // what it still holds, not what was on screen before the attempt.
+    await slot.emitRealtime("tasks:changed", {});
+    await waitFor(() =>
+      expect(slot.getAllByText("This line worries me").length).toBeGreaterThan(
+        0,
+      ),
+    );
     // The drafts are still drafts, and the round can be sent somewhere else.
-    slot.getAllByText("This line worries me");
     slot.getByRole("button", { name: "Submit review" });
+  });
+
+  it("lets the drafts go once the round has gone out", async () => {
+    const slot = openReview(
+      submittingRpc({
+        outcome: "submitted",
+        artifactId: FEEDBACK_ID,
+        threadId: THREAD_ID,
+      }),
+    );
+
+    await clickSubmitRound(slot);
+
+    await slot.findByText(/Sent\./);
+    // Sending reads the drafts again, and this time there are none.
+    await waitFor(() =>
+      expect(slot.queryByText("This line worries me")).toBeNull(),
+    );
+  });
+
+  it("saves the overall note when the reviewer leaves mid-sentence", async () => {
+    const slot = openReview(withOneDraft());
+
+    fireEvent.change(await slot.findByLabelText("Overall note"), {
+      target: { value: "Half a thought." },
+    });
+    // Well inside the debounce window: the note has not been saved yet.
+    expect(slot.rpcCalls).not.toContainEqual({
+      method: "saveReviewDraftSummary",
+      input: { reviewArtifactId: REVIEW_ID, body: "Half a thought." },
+    });
+    slot.lifecycle.unmount();
+
+    await waitFor(() =>
+      expect(slot.rpcCalls).toContainEqual({
+        method: "saveReviewDraftSummary",
+        input: { reviewArtifactId: REVIEW_ID, body: "Half a thought." },
+      }),
+    );
   });
 
   it("saves the overall note before sending the round", async () => {

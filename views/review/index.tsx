@@ -7,7 +7,11 @@ import { isReviewStale } from "../../shared/review-diff.js";
 import { useTasksQuery } from "../../shell/data.js";
 import { useDiffWordWrap } from "../../shell/diff-preference.js";
 import { useTasksNavigation } from "../../shell/routes.js";
-import { ConcernSection, type ReviewPatch } from "./concern.js";
+import {
+  assignFileComments,
+  ConcernSection,
+  type ReviewPatch,
+} from "./concern.js";
 import { useReviewDrafts } from "./drafts.js";
 import {
   pickReviewRound,
@@ -117,7 +121,11 @@ function DiffToolbar({
   onSelectRound: (round: ReviewRound) => void;
 }) {
   return (
-    <div className="sticky top-0 z-20 -mx-8 flex h-10 items-center justify-between gap-3 border-b border-border-hairline bg-background px-8">
+    // Bleeding into the parent's gutters would widen this past the scroller
+    // on any screen too narrow to have centring slack to spend. Nothing here
+    // reaches the gutters anyway, so the background stopping short of them
+    // costs nothing that can be seen.
+    <div className="sticky top-0 z-20 flex h-10 items-center justify-between gap-3 border-b border-border-hairline bg-background">
       {/* On a narrow screen the round matters more than the range, and only
           one of the two fits next to the wrap toggle. */}
       <span className="hidden truncate font-mono text-xs text-muted-foreground sm:inline">
@@ -188,6 +196,12 @@ function ReviewDocument({
   const commentActions = useMemo(
     () => ({ save: saveComment, remove: deleteComment }),
     [saveComment, deleteComment],
+  );
+  // A file can be cited by several concerns; only one of them draws remarks
+  // about the file itself, and that is decided here rather than by each card.
+  const fileCommentPaths = useMemo(
+    () => assignFileComments(review?.metadata.concerns ?? []),
+    [review],
   );
   // The diff is a separate fetch on purpose: it can fail without taking the
   // narrative — the part that is actually authored — down with it.
@@ -315,6 +329,7 @@ function ReviewDocument({
               artifacts={artifacts.data ?? []}
               patches={patches}
               comments={drafts.comments}
+              fileCommentPaths={fileCommentPaths[index]!}
               actions={commentActions}
             />
           ))}

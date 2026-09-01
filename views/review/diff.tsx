@@ -18,7 +18,7 @@ import {
 } from "../../shared/patch-slice.js";
 import {
   anchorFromPatchSelection,
-  patchDrawsLine,
+  patchLineDrawer,
   type PatchSide,
 } from "../../shared/review-selection.js";
 import { useDiffWordWrap } from "../../shell/diff-preference.js";
@@ -29,13 +29,23 @@ import { Icon } from "@/components/ui/icon";
  * The host publishes the code themes it renders its own diffs with on the
  * document element; a surface that reads them stays in step with the app's
  * appearance setting without owning a theme of its own.
+ *
+ * The pair is handed on as one object with the identity of its two names, not
+ * of the read: everything the renderer is configured with hangs off it, and a
+ * fresh object every render would rebuild that configuration every render.
  */
-function hostCodeTheme(): ThemesType | undefined {
-  if (typeof document === "undefined") return undefined;
-  const { bbCodeThemeDark: dark, bbCodeThemeLight: light } =
-    document.documentElement.dataset;
-  if (dark === undefined || light === undefined) return undefined;
-  return { dark, light };
+export function useHostCodeTheme(): ThemesType | undefined {
+  const names =
+    typeof document === "undefined"
+      ? undefined
+      : document.documentElement.dataset;
+  const dark = names?.bbCodeThemeDark;
+  const light = names?.bbCodeThemeLight;
+  return useMemo(
+    () =>
+      dark === undefined || light === undefined ? undefined : { dark, light },
+    [dark, light],
+  );
 }
 
 /** How a comment box says what it is attached to. */
@@ -78,6 +88,12 @@ interface ConcernDiffProps {
   truncated?: boolean;
   /** Every unsent comment on the review; this card shows the ones it draws. */
   comments: readonly ReviewDraftComment[];
+  /**
+   * Whether remarks about the file as a whole belong to this card. False on
+   * every card but the first for a given file, so a file cited by two
+   * concerns still has one place its remarks are written and read.
+   */
+  ownsFileComments: boolean;
   actions: ReviewCommentActions;
 }
 
@@ -87,9 +103,11 @@ interface ConcernDiffProps {
  * Everything this drops is said out loud — a reader must be able to tell a
  * small change from a small view of a large one.
  *
- * A comment appears wherever its lines appear. The same file can sit under
- * two concerns, so this card claims the comments it can actually draw and
- * leaves the rest to whichever card draws them.
+ * A line comment appears wherever its lines appear. The same file can sit
+ * under two concerns, so this card claims the comments it can actually draw
+ * and leaves the rest to whichever card draws them. A remark about the file
+ * as a whole has no lines to follow, so it belongs to one card only and is
+ * told which by whoever laid the cards out.
  */
 export function ConcernDiff({
   path,
@@ -97,6 +115,7 @@ export function ConcernDiff({
   ranges,
   truncated = false,
   comments,
+  ownsFileComments,
   actions,
 }: ConcernDiffProps) {
   const sliced = useMemo(
@@ -114,7 +133,7 @@ export function ConcernDiff({
       return null;
     }
   }, [sliced.patch]);
-  const theme = hostCodeTheme();
+  const theme = useHostCodeTheme();
   const [wrap] = useDiffWordWrap();
   const droppedHunks = sliced.totalHunks - sliced.keptHunks;
 
@@ -123,15 +142,23 @@ export function ConcernDiff({
   // have no line to sit under that the first is not already using.
   const [composer, setComposer] = useState<ReviewDraftAnchor | null>(null);
 
-  const fileComments = comments.filter(
-    (comment) =>
-      comment.anchor.anchor === "file" && comment.anchor.path === path,
+  const fileComments = ownsFileComments
+    ? comments.filter(
+        (comment) =>
+          comment.anchor.anchor === "file" && comment.anchor.path === path,
+      )
+    : [];
+  // Read the patch once and ask it about each comment, rather than reading it
+  // again for every comment the review carries.
+  const drawsLine = useMemo(
+    () => patchLineDrawer(sliced.patch),
+    [sliced.patch],
   );
   const lineComments = comments.filter(
     (comment) =>
       comment.anchor.anchor === "lines" &&
       comment.anchor.path === path &&
-      patchDrawsLine(sliced.patch, comment.anchor.side, comment.anchor.endLine),
+      drawsLine(comment.anchor.side, comment.anchor.endLine),
   );
 
   const composerKey =
@@ -242,15 +269,19 @@ export function ConcernDiff({
             the host truncated this patch
           </span>
         ) : null}
-        <button
-          type="button"
-          aria-label={`Comment on ${path}`}
-          className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
-          onClick={() => setComposer({ anchor: "file", path })}
-        >
-          <Icon name="MessageSquarePlus" className="size-3.5" />
-          Comment on file
-        </button>
+        {/* Only where such a remark would then be shown: a box that writes
+            into another card is worse than no box. */}
+        {ownsFileComments ? (
+          <button
+            type="button"
+            aria-label={`Comment on ${path}`}
+            className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
+            onClick={() => setComposer({ anchor: "file", path })}
+          >
+            <Icon name="MessageSquarePlus" className="size-3.5" />
+            Comment on file
+          </button>
+        ) : null}
       </div>
       {fileComments.length > 0 || composer?.anchor === "file" ? (
         <div className="flex flex-col gap-2 border-b border-border-hairline px-3 py-2">

@@ -601,6 +601,27 @@ function parseReviewDraftQuotedLines(json: string): string[] {
   return z.array(z.string()).parse(parsed);
 }
 
+/** One anchor, flattened to the columns both the insert and the move write. */
+function reviewDraftAnchorColumns(anchor: ReviewDraftAnchor): {
+  anchor: "lines" | "file";
+  path: string;
+  side: ReviewDraftLineSide | null;
+  startLine: number | null;
+  endLine: number | null;
+  quotedLinesJson: string;
+} {
+  return {
+    anchor: anchor.anchor,
+    path: requireNonEmpty(anchor.path, "Review draft comment path"),
+    side: anchor.anchor === "file" ? null : anchor.side,
+    startLine: anchor.anchor === "file" ? null : anchor.startLine,
+    endLine: anchor.anchor === "file" ? null : anchor.endLine,
+    quotedLinesJson: JSON.stringify(
+      anchor.anchor === "file" ? [] : anchor.quotedLines,
+    ),
+  };
+}
+
 function reviewDraftCommentFromRow(
   row: ReviewDraftCommentRow,
 ): ReviewDraftComment {
@@ -2155,13 +2176,39 @@ export function createTasksStore(db: PluginDatabase) {
             `Review draft comment does not belong to review: ${input.reviewArtifactId}`,
           );
         }
-        db.prepare<[string, string, string]>(
+        // The anchor is rewritten too: a saved comment can be moved to
+        // another range, and the contract makes the caller send one.
+        const moved = reviewDraftAnchorColumns(input.anchor);
+        db.prepare<
+          [
+            "lines" | "file",
+            string,
+            ReviewDraftLineSide | null,
+            number | null,
+            number | null,
+            string,
+            string,
+            string,
+            string,
+          ]
+        >(
           `
           UPDATE review_draft_comments
-          SET body = ?, updated_at = ?
+          SET anchor = ?, path = ?, side = ?, start_line = ?, end_line = ?,
+              quoted_lines_json = ?, body = ?, updated_at = ?
           WHERE id = ?
         `,
-        ).run(body, nowIso(), input.id);
+        ).run(
+          moved.anchor,
+          moved.path,
+          moved.side,
+          moved.startLine,
+          moved.endLine,
+          moved.quotedLinesJson,
+          body,
+          nowIso(),
+          input.id,
+        );
         const updated = getReviewDraftComment(input.id);
         if (!updated) throw new Error("Review draft comment update failed");
         return updated;
@@ -2169,13 +2216,7 @@ export function createTasksStore(db: PluginDatabase) {
 
       const id = createOrValidateUlid(input.id ?? undefined);
       const createdAt = nowIso();
-      const anchor = input.anchor;
-      const side: ReviewDraftLineSide | null =
-        anchor.anchor === "file" ? null : anchor.side;
-      const startLine = anchor.anchor === "file" ? null : anchor.startLine;
-      const endLine = anchor.anchor === "file" ? null : anchor.endLine;
-      const quotedLines =
-        anchor.anchor === "file" ? [] : anchor.quotedLines;
+      const placed = reviewDraftAnchorColumns(input.anchor);
       db.prepare<
         [
           string,
@@ -2200,12 +2241,12 @@ export function createTasksStore(db: PluginDatabase) {
       ).run(
         id,
         input.reviewArtifactId,
-        anchor.anchor,
-        requireNonEmpty(anchor.path, "Review draft comment path"),
-        side,
-        startLine,
-        endLine,
-        JSON.stringify(quotedLines),
+        placed.anchor,
+        placed.path,
+        placed.side,
+        placed.startLine,
+        placed.endLine,
+        placed.quotedLinesJson,
         body,
         createdAt,
         createdAt,

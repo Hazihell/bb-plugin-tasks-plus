@@ -1235,6 +1235,99 @@ describe("tasks storage", () => {
     }
   });
 
+  it("keeps every artifact column in place when the table is rebuilt", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const project = createProject(store, "COL");
+      const task = store.createTask({ projectId: project.id, title: "Rebuild" });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        body: "The body",
+        externalUrl: "https://example.test/review",
+        sourceThreadId: "thr_rebuild",
+        metadata: {
+          baseRef: "main",
+          headSha: "abc1234",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+
+      // Replay the rebuild on a database that already holds artifacts: every
+      // value must land back in the column it came from, not the next one.
+      db.exec(`
+        DROP TABLE review_draft_comments;
+        DROP TABLE review_draft_summaries;
+        DELETE FROM schema_version WHERE version = 11;
+      `);
+      createTasksStore(db);
+
+      expect(createTasksStore(db).getTaskArtifact(artifact.id)).toMatchObject({
+        id: artifact.id,
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        body: "The body",
+        externalUrl: "https://example.test/review",
+        sourceThreadId: "thr_rebuild",
+        createdAt: artifact.createdAt,
+      });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("moves a review draft comment to another anchor", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "ANC");
+      const task = store.createTask({ projectId: project.id, title: "Anchor" });
+      const review = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        metadata: {
+          baseRef: "main",
+          headSha: "abc1234",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+      const draft = store.saveReviewDraftComment({
+        reviewArtifactId: review.id,
+        anchor: {
+          anchor: "lines",
+          path: "src/save.ts",
+          side: "additions",
+          startLine: 3,
+          endLine: 3,
+          quotedLines: ["+  save();"],
+        },
+        body: "The write is not durable yet.",
+      });
+
+      const moved = store.saveReviewDraftComment({
+        id: draft.id,
+        reviewArtifactId: review.id,
+        anchor: { anchor: "file", path: "src/write.ts" },
+        body: "The write is not durable yet.",
+      });
+      expect(moved).toMatchObject({
+        id: draft.id,
+        createdAt: draft.createdAt,
+        anchor: { anchor: "file", path: "src/write.ts" },
+      });
+      expect(store.getReviewDraftComment(draft.id)?.anchor).toEqual({
+        anchor: "file",
+        path: "src/write.ts",
+      });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("rejects task artifact kinds outside the allowed set", async () => {
     const { db, harness, store } = setup();
     try {

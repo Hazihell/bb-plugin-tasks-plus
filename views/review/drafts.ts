@@ -40,7 +40,8 @@ function message(error: unknown): string {
  * The server is the only copy: a draft written on a phone has to still be
  * there on a laptop, so nothing here is optimistic — a write lands, then the
  * list is read again. The summary is the exception, because it is typed
- * rather than submitted; it is held locally and saved behind a debounce.
+ * rather than submitted; it is held locally and saved behind a debounce — one
+ * the reviewer never has to outrun, since leaving the view saves it too.
  */
 export function useReviewDrafts(
   reviewArtifactId: string | null,
@@ -84,6 +85,24 @@ export function useReviewDrafts(
     }, SUMMARY_SAVE_DELAY_MS);
     return () => clearTimeout(timer);
   }, [reviewArtifactId, pendingSummary, savedSummary]);
+
+  // The debounce is a delay, not a promise to keep the note only while the
+  // view is on screen: leaving the route within the window would otherwise
+  // lose what was typed. Nothing reads the outcome — there is no longer a
+  // panel to show an error in — so a failure here is silent.
+  const pending = useRef({ reviewArtifactId, pendingSummary, savedSummary });
+  pending.current = { reviewArtifactId, pendingSummary, savedSummary };
+  useEffect(
+    () => () => {
+      const { reviewArtifactId: id, pendingSummary: body } = pending.current;
+      if (id === null || body === null || body === pending.current.savedSummary)
+        return;
+      void rpcRef.current
+        .call("saveReviewDraftSummary", { reviewArtifactId: id, body })
+        .catch(() => {});
+    },
+    [],
+  );
 
   const flushSummary = useCallback(async () => {
     if (reviewArtifactId === null) return;
