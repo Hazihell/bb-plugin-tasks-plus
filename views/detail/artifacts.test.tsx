@@ -29,6 +29,8 @@ const PLAN_ID = "01HZZZZZZZZZZZZZZZZZZZZZA1";
 const OLD_DECISION_ID = "01HZZZZZZZZZZZZZZZZZZZZZA2";
 const NEW_DECISION_ID = "01HZZZZZZZZZZZZZZZZZZZZZA3";
 const REVIEW_ID = "01HZZZZZZZZZZZZZZZZZZZZZA4";
+const SECOND_REVIEW_ID = "01HZZZZZZZZZZZZZZZZZZZZZA5";
+const FEEDBACK_ID = "01HZZZZZZZZZZZZZZZZZZZZZA6";
 
 const task = {
   id: TASK_ID,
@@ -96,6 +98,33 @@ const review = {
     concerns: [],
   },
   createdAt: "2026-07-15T12:00:00.000Z",
+};
+
+const secondReview = {
+  ...review,
+  id: SECOND_REVIEW_ID,
+  title: "Narrative review of round two",
+  createdAt: "2026-07-15T14:00:00.000Z",
+};
+
+const feedback = {
+  id: FEEDBACK_ID,
+  taskId: TASK_ID,
+  kind: "review_feedback",
+  title: "Feedback on Narrative review",
+  body: null,
+  externalUrl: null,
+  attachmentId: null,
+  sourceThreadId: null,
+  metadata: {
+    reviewArtifactId: REVIEW_ID,
+    verdict: "request_changes",
+    summary: "Two things to change.",
+    comments: [],
+    headSha: "abc1234",
+    targetThreadId: null,
+  },
+  createdAt: "2026-07-15T13:00:00.000Z",
 };
 
 function detailRpc(overrides: Record<string, unknown> = {}) {
@@ -271,6 +300,43 @@ describe("artifact review launcher", () => {
 
     await slot.findByText("Narrative review");
     expect(slot.container.textContent).not.toContain("unsent");
+  });
+
+  it("shows an answered review as answered, not as a record of its own", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          listArtifacts: () => ({
+            artifacts: [review, feedback, secondReview],
+          }),
+        }),
+      },
+    );
+
+    // The series reads as a series: two rounds, the older one settled and the
+    // newer one still asking.
+    await slot.findByText("Round 1");
+    await slot.findByText("Round 2");
+    await slot.findByText("Changes requested");
+    await slot.findByText("Unanswered");
+    // And the answer is not a third thing sitting beside them.
+    expect(slot.queryByText("Feedback on Narrative review")).toBeNull();
+  });
+
+  it("keeps an answer whose review has gone", async () => {
+    const slot = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "task/TSK-5" },
+      {
+        rpc: detailRpc({
+          listArtifacts: () => ({ artifacts: [feedback] }),
+        }),
+      },
+    );
+
+    await slot.findByText("Feedback on Narrative review");
   });
 
   it("leaves rows of other kinds without the control", async () => {

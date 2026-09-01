@@ -8,6 +8,11 @@ import {
 import { TasksEditor } from "../../editor/tasks-editor.js";
 import { useTasksQuery } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
+import {
+  REVIEW_VERDICT_LABELS,
+  summariseReviewRounds,
+  type ReviewRound,
+} from "../review/rounds.js";
 import { attachmentDownloadUrl } from "./attachments.js";
 import { formatRelativeTime } from "./meta.js";
 import { Icon } from "@/components/ui/icon";
@@ -21,11 +26,18 @@ function ArtifactRow({
   artifact,
   taskKey,
   unsentDrafts,
+  round = null,
 }: {
   artifact: TaskArtifact;
   taskKey: string;
   /** Comments written against this review and not yet submitted. */
   unsentDrafts: number;
+  /**
+   * Where this artifact sits in the series of reviews, when it is one. The
+   * answer travels with it: a reader asking what became of a review is asking
+   * about the review, not about a separate record filed elsewhere.
+   */
+  round?: ReviewRound | null;
 }) {
   const [open, setOpen] = useState(false);
   const navigation = useTasksNavigation();
@@ -51,11 +63,29 @@ function ArtifactRow({
           <span className="shrink-0 rounded-sm bg-secondary px-1 py-px text-2xs font-semibold text-muted-foreground">
             {TASK_ARTIFACT_KIND_LABELS[artifact.kind]}
           </span>
+          {round === null ? null : (
+            <span className="shrink-0 text-2xs font-semibold text-muted-foreground">
+              Round {round.number}
+            </span>
+          )}
           <span className="min-w-0 truncate">{artifact.title}</span>
           <time className="shrink-0 text-xs text-muted-foreground">
             {formatRelativeTime(artifact.createdAt)}
           </time>
         </button>
+        {round === null ? null : (
+          <span
+            className={
+              round.answer === null
+                ? "shrink-0 rounded-sm bg-secondary px-1.5 py-px text-2xs font-semibold text-foreground"
+                : "shrink-0 rounded-sm px-1.5 py-px text-2xs text-muted-foreground"
+            }
+          >
+            {round.answer === null
+              ? "Unanswered"
+              : REVIEW_VERDICT_LABELS[round.answer.metadata.verdict]}
+          </span>
+        )}
         {unsentDrafts > 0 ? (
           <span
             className="shrink-0 rounded-sm bg-secondary px-1.5 py-px text-2xs font-semibold text-foreground"
@@ -100,6 +130,24 @@ function ArtifactRow({
             readOnly
             variant="comment"
           />
+          {round?.answer ? (
+            <div className="mt-2 border-l-2 border-border pl-2">
+              <div className="text-2xs font-semibold text-muted-foreground">
+                Your answer ·{" "}
+                {REVIEW_VERDICT_LABELS[round.answer.metadata.verdict]} ·{" "}
+                {round.answer.metadata.comments.length}{" "}
+                {round.answer.metadata.comments.length === 1
+                  ? "comment"
+                  : "comments"}
+              </div>
+              <TasksEditor
+                value={round.answer.metadata.summary}
+                onChange={() => {}}
+                readOnly
+                variant="comment"
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -129,18 +177,28 @@ export function ArtifactsSection({
   const unsentByReview = new Map(
     (drafts.data ?? []).map((entry) => [entry.reviewArtifactId, entry.count]),
   );
-  if (artifacts.length === 0) return null;
+  // An answer is not a peer of the review it answers; it is what happened to
+  // it. Every answer that found its review is shown on that review's row, so
+  // only an orphan — a review since deleted — is left to stand on its own.
+  const rounds = summariseReviewRounds(artifacts);
+  const roundByReview = new Map(rounds.map((round) => [round.review.id, round]));
+  const answered = new Set(
+    rounds.flatMap((round) => (round.answer ? [round.answer.id] : [])),
+  );
+  const listed = artifacts.filter((artifact) => !answered.has(artifact.id));
+  if (listed.length === 0) return null;
   return (
     <section className="mt-6">
       <div className="mb-2 pt-1.5 text-xs font-semibold text-muted-foreground">
         Artifacts
       </div>
-      {orderArtifactsByKindThenNewest(artifacts).map((artifact) => (
+      {orderArtifactsByKindThenNewest(listed).map((artifact) => (
         <ArtifactRow
           key={artifact.id}
           artifact={artifact}
           taskKey={taskKey}
           unsentDrafts={unsentByReview.get(artifact.id) ?? 0}
+          round={roundByReview.get(artifact.id) ?? null}
         />
       ))}
     </section>
