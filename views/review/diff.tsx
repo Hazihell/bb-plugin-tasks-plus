@@ -255,9 +255,27 @@ export function ConcernDiff({
       <div
         // Directly under the document's toolbar, and clipped by this card, so
         // the file name follows its own patch and no further.
-        className="sticky top-10 z-10 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-t-md border-b border-border-hairline bg-card px-3 py-1.5"
+        className="sticky top-10 z-10 flex flex-col gap-y-0.5 rounded-t-md border-b border-border-hairline bg-card px-3 py-1.5"
       >
-        <span className="font-mono text-xs">{path}</span>
+        {/* The name and the button share a row of their own. What the card had
+            to leave out is said underneath: a note long enough to wrap must
+            not be able to carry the button off the header with it. */}
+        <div className="flex items-baseline gap-x-3">
+          <span className="min-w-0 truncate font-mono text-xs">{path}</span>
+          {/* Only where such a remark would then be shown: a box that writes
+              into another card is worse than no box. */}
+          {ownsFileComments ? (
+            <button
+              type="button"
+              aria-label={`Comment on ${path}`}
+              className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
+              onClick={() => setComposer({ anchor: "file", path })}
+            >
+              <Icon name="MessageSquarePlus" className="size-3.5" />
+              Comment on file
+            </button>
+          ) : null}
+        </div>
         {droppedHunks > 0 ? (
           <span className="text-2xs text-muted-foreground">
             {droppedHunks} other {droppedHunks === 1 ? "hunk" : "hunks"} in this
@@ -268,19 +286,6 @@ export function ConcernDiff({
           <span className="text-2xs text-muted-foreground">
             the host truncated this patch
           </span>
-        ) : null}
-        {/* Only where such a remark would then be shown: a box that writes
-            into another card is worse than no box. */}
-        {ownsFileComments ? (
-          <button
-            type="button"
-            aria-label={`Comment on ${path}`}
-            className="ml-auto flex shrink-0 items-center gap-1 text-2xs text-muted-foreground hover:text-foreground"
-            onClick={() => setComposer({ anchor: "file", path })}
-          >
-            <Icon name="MessageSquarePlus" className="size-3.5" />
-            Comment on file
-          </button>
         ) : null}
       </div>
       {fileComments.length > 0 || composer?.anchor === "file" ? (

@@ -31,6 +31,20 @@ const UNPARSEABLE_PATCH = [
   "",
 ].join("\n");
 
+// Two hunks, of which a concern citing lines 1-4 keeps only the first, so the
+// card must say what it left out.
+const TWO_HUNK_PATCH = [
+  "@@ -1,3 +1,4 @@",
+  " const one = 1;",
+  "+const two = 2;",
+  " const three = 3;",
+  "@@ -20,3 +21,4 @@",
+  " const twenty = 20;",
+  "+const far = 21;",
+  " const away = 22;",
+  "",
+].join("\n");
+
 const task = {
   id: TASK_ID,
   projectId: PROJECT_ID,
@@ -166,8 +180,10 @@ describe("review route", () => {
     const slot = openReview(reviewRpc());
 
     const fallback = await slot.findByText(/\+const two = 2;/);
-    const fileHeader = slot.getByText("shared/patch-slice.ts").parentElement!;
-    expect(fileHeader.className).toContain("sticky");
+    const fileHeader = slot
+      .getByText("shared/patch-slice.ts")
+      .closest<HTMLElement>(".sticky")!;
+    expect(fileHeader).not.toBeNull();
     // A sticky element sticks to its nearest scrolling ancestor. The route's
     // own scroll area must be the first one found: anything that clips in
     // between would pin the header to a box that never scrolls.
@@ -612,6 +628,38 @@ describe("review comments", () => {
         },
       }),
     );
+  });
+
+  it("keeps the file's comment button beside its name, note or no note", async () => {
+    const slot = openReview(
+      answerableRpc({
+        getReviewDiff: () => ({
+          outcome: "available",
+          baseRef: "main",
+          pinnedHeadSha: PINNED_SHA,
+          currentHeadSha: PINNED_SHA,
+          environmentId: "env_abc",
+          files: [
+            {
+              path: "shared/patch-slice.ts",
+              patch: TWO_HUNK_PATCH,
+              truncated: false,
+            },
+          ],
+        }),
+      }),
+    );
+
+    // The card had to drop a hunk, so it says so.
+    await slot.findByText(/1 other hunk in this file/);
+    const open = slot.getByRole("button", {
+      name: "Comment on shared/patch-slice.ts",
+    });
+    // A note long enough to wrap shares no row with the button, so it can
+    // never push it out of the header.
+    const row = open.parentElement!;
+    expect(row.textContent).toContain("shared/patch-slice.ts");
+    expect(row.textContent).not.toContain("other hunk");
   });
 
   it("draws a remark about a file once, however many concerns cite it", async () => {
