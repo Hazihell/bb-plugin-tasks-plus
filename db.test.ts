@@ -54,12 +54,11 @@ describe("tasks storage", () => {
       createTasksStore(db);
       expect(
         db
-          .prepare<
-            [],
-            { count: number }
-          >("SELECT COUNT(*) AS count FROM schema_version")
+          .prepare<[], { count: number }>(
+            "SELECT COUNT(*) AS count FROM schema_version",
+          )
           .get()?.count,
-      ).toBe(10);
+      ).toBe(11);
     } finally {
       await harness.dispose();
     }
@@ -361,8 +360,10 @@ describe("tasks storage", () => {
           .baseBranch,
       ).toBe(null);
       expect(
-        store.createTask({ projectId: project.id, title: "Uses project target" })
-          .dispatchBbProjectId,
+        store.createTask({
+          projectId: project.id,
+          title: "Uses project target",
+        }).dispatchBbProjectId,
       ).toBe(null);
 
       expect(

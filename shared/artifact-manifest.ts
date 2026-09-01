@@ -12,6 +12,7 @@ export const TASK_ARTIFACT_KIND_LABELS: Record<TaskArtifactKind, string> = {
   evidence: "Evidence",
   review: "Review",
   review_result: "Review Result",
+  review_feedback: "Review Feedback",
 };
 
 /** How many artifacts of one kind a manifest lists before it summarises. */
