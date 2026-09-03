@@ -2892,7 +2892,7 @@ describe("bb tasks-plus CLI", () => {
       expect(unknownKind.exitCode).toBe(1);
       expect(unknownKind.stderr).toContain('unknown kind "postmortem"');
       expect(unknownKind.stderr).toContain(
-        "approved_plan, implementation_plan, decision, evidence, review, review_result",
+        "approved_plan, decision, evidence, review, review_result",
       );
 
       const missingMeta = await harness.runCli([

@@ -286,6 +286,114 @@ const MIGRATIONS = [
   `
     ALTER TABLE tasks ADD COLUMN dispatch_bb_project_id TEXT;
   `,
+  `
+    -- A human's answer to a review artifact. SQLite cannot widen a CHECK in
+    -- place, so the table is rebuilt with the new kind allowed.
+    CREATE TABLE task_artifacts_new (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN (
+        'approved_plan', 'implementation_plan', 'decision', 'evidence',
+        'review', 'review_result', 'review_feedback'
+      )),
+      title TEXT NOT NULL,
+      body TEXT,
+      external_url TEXT,
+      attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      source_thread_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      CHECK (source_thread_id IS NULL OR source_thread_id GLOB 'thr_*')
+    );
+
+    INSERT INTO task_artifacts_new (
+      id, task_id, kind, title, body, external_url, attachment_id,
+      source_thread_id, metadata_json, created_at
+    )
+      SELECT id, task_id, kind, title, body, external_url, attachment_id,
+             source_thread_id, metadata_json, created_at
+      FROM task_artifacts;
+
+    DROP TABLE task_artifacts;
+    ALTER TABLE task_artifacts_new RENAME TO task_artifacts;
+
+    CREATE INDEX idx_task_artifacts_task
+      ON task_artifacts(task_id, kind, created_at, id);
+
+    -- Unsent review comments. Deleted when their round is submitted, and
+    -- cascaded away with the review they answer, so a row here always means
+    -- work in progress on a review that still exists.
+    CREATE TABLE review_draft_comments (
+      id TEXT PRIMARY KEY,
+      review_artifact_id TEXT NOT NULL
+        REFERENCES task_artifacts(id) ON DELETE CASCADE,
+      anchor TEXT NOT NULL CHECK (anchor IN ('lines', 'file')),
+      path TEXT NOT NULL,
+      side TEXT CHECK (side IS NULL OR side IN ('additions', 'deletions')),
+      start_line INTEGER,
+      end_line INTEGER,
+      quoted_lines_json TEXT NOT NULL DEFAULT '[]',
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      -- A file comment carries no position; a line comment carries all of it.
+      CHECK (
+        (anchor = 'file'
+          AND side IS NULL AND start_line IS NULL AND end_line IS NULL)
+        OR (anchor = 'lines'
+          AND side IS NOT NULL AND start_line IS NOT NULL
+          AND end_line IS NOT NULL AND end_line >= start_line)
+      )
+    );
+
+    CREATE INDEX idx_review_draft_comments_review
+      ON review_draft_comments(review_artifact_id, path, start_line, id);
+
+    -- The reviewer's overall note, at most one per review.
+    CREATE TABLE review_draft_summaries (
+      review_artifact_id TEXT PRIMARY KEY
+        REFERENCES task_artifacts(id) ON DELETE CASCADE,
+      body TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `,
+  `
+    -- implementation_plan is retired: the direction a graph is built to is
+    -- the parent's approved_plan, and a slice's plan stays in its thread.
+    -- Existing rows become approved_plan; the CHECK then refuses the old kind.
+    CREATE TABLE task_artifacts_new (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL CHECK (kind IN (
+        'approved_plan', 'decision', 'evidence',
+        'review', 'review_result', 'review_feedback'
+      )),
+      title TEXT NOT NULL,
+      body TEXT,
+      external_url TEXT,
+      attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      source_thread_id TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL,
+      CHECK (source_thread_id IS NULL OR source_thread_id GLOB 'thr_*')
+    );
+
+    INSERT INTO task_artifacts_new (
+      id, task_id, kind, title, body, external_url, attachment_id,
+      source_thread_id, metadata_json, created_at
+    )
+      SELECT id, task_id,
+             CASE WHEN kind = 'implementation_plan' THEN 'approved_plan' ELSE kind END,
+             title, body, external_url, attachment_id,
+             source_thread_id, metadata_json, created_at
+      FROM task_artifacts;
+
+    DROP TABLE task_artifacts;
+    ALTER TABLE task_artifacts_new RENAME TO task_artifacts;
+
+    CREATE INDEX idx_task_artifacts_task
+      ON task_artifacts(task_id, kind, created_at, id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

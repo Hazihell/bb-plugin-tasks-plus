@@ -13,6 +13,10 @@ import {
   presetReasoningLevelSchema,
   presetServiceTierSchema,
 } from "../shared/contract.js";
+import type {
+  ReviewDraftAnchor,
+  ReviewDraftComment,
+} from "../shared/contract.js";
 import { RESOLVED_BLOCKER_STATUSES } from "../shared/blockers.js";
 import { PROJECT_PREFIX_PATTERN } from "../shared/project-prefix.js";
 import type {
@@ -191,6 +195,43 @@ interface TaskArtifactRow {
   source_thread_id: string | null;
   metadata_json: string;
   created_at: string;
+}
+
+type ReviewDraftLineSide = Extract<
+  ReviewDraftAnchor,
+  { anchor: "lines" }
+>["side"];
+
+interface ReviewDraftCommentRow {
+  id: string;
+  review_artifact_id: string;
+  anchor: "lines" | "file";
+  path: string;
+  side: ReviewDraftLineSide | null;
+  start_line: number | null;
+  end_line: number | null;
+  quoted_lines_json: string;
+  body: string;
+  created_at: string;
+  updated_at: string;
+}
+
+interface ReviewDraftSummaryRow {
+  review_artifact_id: string;
+  body: string;
+  updated_at: string;
+}
+
+interface ReviewDraftCountRow {
+  review_artifact_id: string;
+  count: number;
+}
+
+interface SaveReviewDraftCommentInput {
+  id?: string | null;
+  reviewArtifactId: string;
+  anchor: ReviewDraftAnchor;
+  body: string;
 }
 
 interface TaskThreadRow {
@@ -550,6 +591,85 @@ function taskArtifactFromRow(row: TaskArtifactRow): TaskArtifact {
   };
 }
 
+function parseReviewDraftQuotedLines(json: string): string[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error("Review draft quoted lines must be a JSON array");
+  }
+  return z.array(z.string()).parse(parsed);
+}
+
+/** One anchor, flattened to the columns both the insert and the move write. */
+function reviewDraftAnchorColumns(anchor: ReviewDraftAnchor): {
+  anchor: "lines" | "file";
+  path: string;
+  side: ReviewDraftLineSide | null;
+  startLine: number | null;
+  endLine: number | null;
+  quotedLinesJson: string;
+} {
+  return {
+    anchor: anchor.anchor,
+    path: requireNonEmpty(anchor.path, "Review draft comment path"),
+    side: anchor.anchor === "file" ? null : anchor.side,
+    startLine: anchor.anchor === "file" ? null : anchor.startLine,
+    endLine: anchor.anchor === "file" ? null : anchor.endLine,
+    quotedLinesJson: JSON.stringify(
+      anchor.anchor === "file" ? [] : anchor.quotedLines,
+    ),
+  };
+}
+
+function reviewDraftCommentFromRow(
+  row: ReviewDraftCommentRow,
+): ReviewDraftComment {
+  const quotedLines = parseReviewDraftQuotedLines(row.quoted_lines_json);
+  if (row.anchor === "file") {
+    if (
+      row.side !== null ||
+      row.start_line !== null ||
+      row.end_line !== null ||
+      quotedLines.length > 0
+    ) {
+      throw new Error("File review draft has line anchor data");
+    }
+    return {
+      id: row.id,
+      reviewArtifactId: row.review_artifact_id,
+      anchor: { anchor: "file", path: row.path },
+      body: row.body,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  if (
+    row.side === null ||
+    row.start_line === null ||
+    row.end_line === null ||
+    row.end_line < row.start_line
+  ) {
+    throw new Error("Line review draft is missing its anchor data");
+  }
+  return {
+    id: row.id,
+    reviewArtifactId: row.review_artifact_id,
+    anchor: {
+      anchor: "lines",
+      path: row.path,
+      side: row.side,
+      startLine: row.start_line,
+      endLine: row.end_line,
+      quotedLines,
+    },
+    body: row.body,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function taskThreadFromRow(row: TaskThreadRow): TaskThread {
   return {
     id: row.id,
@@ -656,6 +776,14 @@ export function createTasksStore(db: PluginDatabase) {
   const getTaskArtifactRow = db.prepare<[string], TaskArtifactRow>(
     "SELECT * FROM task_artifacts WHERE id = ?",
   );
+  const getReviewDraftCommentRow = db.prepare<
+    [string],
+    ReviewDraftCommentRow
+  >("SELECT * FROM review_draft_comments WHERE id = ?");
+  const getReviewDraftSummaryRow = db.prepare<
+    [string],
+    ReviewDraftSummaryRow
+  >("SELECT * FROM review_draft_summaries WHERE review_artifact_id = ?");
   const getTaskThreadRow = db.prepare<[string], TaskThreadRow>(
     "SELECT * FROM task_threads WHERE id = ?",
   );
@@ -2013,6 +2141,199 @@ export function createTasksStore(db: PluginDatabase) {
     );
   }
 
+  function getReviewDraftComment(id: string): ReviewDraftComment | undefined {
+    const row = getReviewDraftCommentRow.get(id);
+    return row ? reviewDraftCommentFromRow(row) : undefined;
+  }
+
+  function listReviewDraftComments(
+    reviewArtifactId: string,
+  ): ReviewDraftComment[] {
+    return db
+      .prepare<[string], ReviewDraftCommentRow>(
+        `
+        SELECT * FROM review_draft_comments
+        WHERE review_artifact_id = ?
+        ORDER BY created_at, id
+      `,
+      )
+      .all(reviewArtifactId)
+      .map(reviewDraftCommentFromRow);
+  }
+
+  const saveReviewDraftCommentTransaction = db.transaction(
+    (input: SaveReviewDraftCommentInput): ReviewDraftComment => {
+      requireTaskArtifact(input.reviewArtifactId);
+      const body = requireNonEmpty(input.body, "Review draft comment body");
+
+      if (input.id !== undefined && input.id !== null) {
+        const current = getReviewDraftComment(input.id);
+        if (!current) {
+          throw new Error(`Review draft comment not found: ${input.id}`);
+        }
+        if (current.reviewArtifactId !== input.reviewArtifactId) {
+          throw new Error(
+            `Review draft comment does not belong to review: ${input.reviewArtifactId}`,
+          );
+        }
+        // The anchor is rewritten too: a saved comment can be moved to
+        // another range, and the contract makes the caller send one.
+        const moved = reviewDraftAnchorColumns(input.anchor);
+        db.prepare<
+          [
+            "lines" | "file",
+            string,
+            ReviewDraftLineSide | null,
+            number | null,
+            number | null,
+            string,
+            string,
+            string,
+            string,
+          ]
+        >(
+          `
+          UPDATE review_draft_comments
+          SET anchor = ?, path = ?, side = ?, start_line = ?, end_line = ?,
+              quoted_lines_json = ?, body = ?, updated_at = ?
+          WHERE id = ?
+        `,
+        ).run(
+          moved.anchor,
+          moved.path,
+          moved.side,
+          moved.startLine,
+          moved.endLine,
+          moved.quotedLinesJson,
+          body,
+          nowIso(),
+          input.id,
+        );
+        const updated = getReviewDraftComment(input.id);
+        if (!updated) throw new Error("Review draft comment update failed");
+        return updated;
+      }
+
+      const id = createOrValidateUlid(input.id ?? undefined);
+      const createdAt = nowIso();
+      const placed = reviewDraftAnchorColumns(input.anchor);
+      db.prepare<
+        [
+          string,
+          string,
+          "lines" | "file",
+          string,
+          ReviewDraftLineSide | null,
+          number | null,
+          number | null,
+          string,
+          string,
+          string,
+          string,
+        ]
+      >(
+        `
+        INSERT INTO review_draft_comments (
+          id, review_artifact_id, anchor, path, side, start_line, end_line,
+          quoted_lines_json, body, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      ).run(
+        id,
+        input.reviewArtifactId,
+        placed.anchor,
+        placed.path,
+        placed.side,
+        placed.startLine,
+        placed.endLine,
+        placed.quotedLinesJson,
+        body,
+        createdAt,
+        createdAt,
+      );
+      const created = getReviewDraftComment(id);
+      if (!created) throw new Error("Review draft comment insert failed");
+      return created;
+    },
+  );
+
+  function saveReviewDraftComment(
+    input: SaveReviewDraftCommentInput,
+  ): ReviewDraftComment {
+    return saveReviewDraftCommentTransaction(input);
+  }
+
+  function deleteReviewDraftComment(id: string): boolean {
+    return (
+      db
+        .prepare<[string]>("DELETE FROM review_draft_comments WHERE id = ?")
+        .run(id).changes > 0
+    );
+  }
+
+  function getReviewDraftSummary(reviewArtifactId: string): string {
+    return getReviewDraftSummaryRow.get(reviewArtifactId)?.body ?? "";
+  }
+
+  function saveReviewDraftSummary(
+    reviewArtifactId: string,
+    body: string,
+  ): void {
+    requireTaskArtifact(reviewArtifactId);
+    db.prepare<[string, string, string]>(
+      `
+      INSERT INTO review_draft_summaries (review_artifact_id, body, updated_at)
+      VALUES (?, ?, ?)
+      ON CONFLICT (review_artifact_id) DO UPDATE SET
+        body = excluded.body,
+        updated_at = excluded.updated_at
+    `,
+    ).run(reviewArtifactId, body, nowIso());
+  }
+
+  function countReviewDrafts(
+    taskId: string,
+  ): Array<{ reviewArtifactId: string; count: number }> {
+    return db
+      .prepare<[string], ReviewDraftCountRow>(
+        `
+        SELECT task_artifacts.id AS review_artifact_id,
+               COUNT(review_draft_comments.id) AS count
+        FROM task_artifacts
+        LEFT JOIN review_draft_comments
+          ON task_artifacts.id = review_draft_comments.review_artifact_id
+        WHERE task_artifacts.task_id = ?
+          AND task_artifacts.kind = 'review'
+        GROUP BY task_artifacts.id
+        ORDER BY task_artifacts.created_at, task_artifacts.id
+      `,
+      )
+      .all(taskId)
+      .map((row) => ({
+        reviewArtifactId: row.review_artifact_id,
+        count: row.count,
+      }));
+  }
+
+  const deleteReviewDraftsTransaction = db.transaction(
+    (reviewArtifactId: string): void => {
+      db
+        .prepare<[string]>(
+          "DELETE FROM review_draft_comments WHERE review_artifact_id = ?",
+        )
+        .run(reviewArtifactId);
+      db
+        .prepare<[string]>(
+          "DELETE FROM review_draft_summaries WHERE review_artifact_id = ?",
+        )
+        .run(reviewArtifactId);
+    },
+  );
+
+  function deleteReviewDrafts(reviewArtifactId: string): void {
+    deleteReviewDraftsTransaction(reviewArtifactId);
+  }
+
   function getTaskThread(id: string): TaskThread | undefined {
     const row = getTaskThreadRow.get(id);
     return row ? taskThreadFromRow(row) : undefined;
@@ -2313,6 +2634,14 @@ export function createTasksStore(db: PluginDatabase) {
     getTaskArtifact,
     listTaskArtifacts,
     deleteTaskArtifact,
+    getReviewDraftComment,
+    listReviewDraftComments,
+    saveReviewDraftComment,
+    deleteReviewDraftComment,
+    getReviewDraftSummary,
+    saveReviewDraftSummary,
+    countReviewDrafts,
+    deleteReviewDrafts,
     upsertTaskThread,
     getTaskThread,
     getTaskThreadByThreadId,

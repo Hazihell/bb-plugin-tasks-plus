@@ -161,6 +161,47 @@ describe("subtasks in the list view", () => {
     ).toBe("false");
   });
 
+  it("remembers which parents were open, per list surface", async () => {
+    const first = renderList();
+    await expandParent(first);
+    await waitFor(() =>
+      expect(rowKeys(first)).toEqual(["TSK-1", "TSK-2", "TSK-3", "TSK-4"]),
+    );
+    cleanup();
+
+    // A fresh mount of the same surface reads the choice back out of storage.
+    const reopened = renderList();
+    await waitFor(() =>
+      expect(rowKeys(reopened)).toEqual(["TSK-1", "TSK-2", "TSK-3", "TSK-4"]),
+    );
+    await reopened.findByRole("button", {
+      name: "Collapse 2 subtasks of TSK-1",
+    });
+    cleanup();
+
+    // And says nothing about a different one: All is its own scope.
+    const allTasks = renderSlot(
+      app.navPanels[0]!,
+      { subPath: "" },
+      {
+        rpc: {
+          listProjects: () => ({ projects: [project] }),
+          listFolders: () => ({ folders: [] }),
+          listPresets: () => ({ presets: [] }),
+          sidebarSummary: () => ({ projects: [] }),
+          listLabels: () => ({ labels: [] }),
+          listTasks: () => ({ tasks }),
+          listTaskThreads: () => ({ taskThreads: [] }),
+          listComments: () => ({ comments: [] }),
+          listAttachments: () => ({ attachments: [] }),
+        },
+      },
+    );
+    await allTasks.findByRole("button", {
+      name: "Expand 2 subtasks of TSK-1",
+    });
+  });
+
   it("filters parents only, so a child never renders without its parent", async () => {
     const slot = renderList();
     await expandParent(slot);

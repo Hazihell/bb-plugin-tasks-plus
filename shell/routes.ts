@@ -16,7 +16,9 @@ export type TasksRoute =
   | { kind: "active" }
   | { kind: "manage" }
   | { kind: "project"; projectId: string; view: TaskViewMode | null }
-  | { kind: "task"; taskKey: string };
+  | { kind: "task"; taskKey: string }
+  /** `artifactId` null = the task's newest review artifact. */
+  | { kind: "review"; taskKey: string; artifactId: string | null };
 
 /** A route whose project view has been resolved; what the shell renders. */
 export type ResolvedTasksRoute =
@@ -30,6 +32,8 @@ export type ResolvedTasksRoute =
  *   "active"                → tasks with agents working
  *   "manage"                → manage panel (labels, presets, folders)
  *   "task/<taskKey>"        → task detail (e.g. task/TSK-4)
+ *   "review/<taskKey>"      → the task's newest review artifact, as a document
+ *   "review/<taskKey>/<artifactId>" → that one review artifact
  *   "<projectId>"           → project, view from the stored preference
  *   "<projectId>?view=list"  → project list view
  *   "<projectId>?view=board" → project board view
@@ -59,6 +63,13 @@ export function parseTasksRoute(rawSubPath: string): TasksRoute {
     if (taskKey !== undefined) return { kind: "task", taskKey };
     return { kind: "all" };
   }
+  if (head === "review") {
+    const taskKey = segments[1];
+    if (taskKey !== undefined) {
+      return { kind: "review", taskKey, artifactId: segments[2] ?? null };
+    }
+    return { kind: "all" };
+  }
   const view = new URLSearchParams(query).get("view");
   return {
     kind: "project",
@@ -79,6 +90,10 @@ export function tasksRouteToSubPath(route: TasksRoute): string {
       return "manage";
     case "task":
       return `task/${route.taskKey}`;
+    case "review":
+      return route.artifactId === null
+        ? `review/${route.taskKey}`
+        : `review/${route.taskKey}/${route.artifactId}`;
     case "project":
       return route.view === null
         ? route.projectId

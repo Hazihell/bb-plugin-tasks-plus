@@ -31,11 +31,11 @@ export const TASK_PRIORITIES = [
  */
 export const TASK_ARTIFACT_KINDS = [
   "approved_plan",
-  "implementation_plan",
   "decision",
   "evidence",
   "review",
   "review_result",
+  "review_feedback",
 ] as const;
 
 /** The kinds of check an `evidence` artifact can record. */
@@ -321,6 +321,14 @@ const reviewConcernSchema = z
   })
   .strict();
 
+const reviewValidationSchema = z
+  .object({
+    command: nonBlankStringSchema,
+    result: z.enum(["passed", "failed", "not_run"]),
+    summary: z.string(),
+  })
+  .strict();
+
 /** A review of a diff range. No concerns is a valid outcome, not an error. */
 const reviewArtifactMetadataSchema = z
   .object({
@@ -328,6 +336,63 @@ const reviewArtifactMetadataSchema = z
     headSha: nonBlankStringSchema,
     environmentId: z.string().startsWith("env_").nullable(),
     concerns: z.array(reviewConcernSchema),
+    validation: z.array(reviewValidationSchema).optional(),
+  })
+  .strict();
+
+/**
+ * Where one feedback comment sits. A comment on lines names the side of the
+ * diff it is on, because a removed line has no place in the current file and
+ * the agent must not go looking for one. A comment on a file has no lines at
+ * all: it is the escape hatch for anything the review did not cite.
+ */
+const reviewFeedbackCommentSchema = z.discriminatedUnion("anchor", [
+  z
+    .object({
+      anchor: z.literal("lines"),
+      path: nonBlankStringSchema,
+      side: z.enum(["additions", "deletions"]),
+      startLine: z.number().int().min(1),
+      endLine: z.number().int().min(1),
+      /**
+       * The selected lines verbatim, with their diff prefix and no
+       * surrounding context. Carried so the reader of this artifact never has
+       * to resolve a line number against a file that has since moved on.
+       */
+      quotedLines: z.array(z.string()),
+      body: nonBlankStringSchema,
+    })
+    .strict()
+    .refine((comment) => comment.endLine >= comment.startLine, {
+      path: ["endLine"],
+      message: "must not be before startLine",
+    }),
+  z
+    .object({
+      anchor: z.literal("file"),
+      path: nonBlankStringSchema,
+      body: nonBlankStringSchema,
+    })
+    .strict(),
+]);
+
+/**
+ * One round of human review answering one `review` artifact.
+ *
+ * `headSha` is copied from the review rather than read live: this artifact
+ * must keep describing the commit it was written against even after the
+ * branch moves. `targetThreadId` is null when nothing was sent — an approval
+ * is recorded, not delivered.
+ */
+const reviewFeedbackArtifactMetadataSchema = z
+  .object({
+    reviewArtifactId: idSchema,
+    verdict: z.enum(["approve", "request_changes", "comment"]),
+    /** The reviewer's overall note. Empty is normal. */
+    summary: z.string(),
+    comments: z.array(reviewFeedbackCommentSchema),
+    headSha: nonBlankStringSchema,
+    targetThreadId: z.string().startsWith("thr_").nullable(),
   })
   .strict();
 
@@ -339,11 +404,11 @@ const reviewArtifactMetadataSchema = z
  */
 const taskArtifactMetadataSchemas = {
   approved_plan: planArtifactMetadataSchema,
-  implementation_plan: planArtifactMetadataSchema,
   decision: decisionArtifactMetadataSchema,
   evidence: evidenceArtifactMetadataSchema,
   review: reviewArtifactMetadataSchema,
   review_result: reviewResultArtifactMetadataSchema,
+  review_feedback: reviewFeedbackArtifactMetadataSchema,
 } as const satisfies Record<TaskArtifactKind, z.ZodType>;
 
 const taskArtifactBaseShape = {
@@ -390,22 +455,57 @@ function taskArtifactVariant<
  */
 export const taskArtifactSchema = z.discriminatedUnion("kind", [
   taskArtifactVariant(taskArtifactBaseShape, "approved_plan"),
-  taskArtifactVariant(taskArtifactBaseShape, "implementation_plan"),
   taskArtifactVariant(taskArtifactBaseShape, "decision"),
   taskArtifactVariant(taskArtifactBaseShape, "evidence"),
   taskArtifactVariant(taskArtifactBaseShape, "review"),
   taskArtifactVariant(taskArtifactBaseShape, "review_result"),
+  taskArtifactVariant(taskArtifactBaseShape, "review_feedback"),
 ]);
 
 /** Written as one union so an `evidence` artifact cannot carry `decision` metadata. */
 const createTaskArtifactInputSchema = z.discriminatedUnion("kind", [
   taskArtifactVariant(createTaskArtifactBaseShape, "approved_plan"),
-  taskArtifactVariant(createTaskArtifactBaseShape, "implementation_plan"),
   taskArtifactVariant(createTaskArtifactBaseShape, "decision"),
   taskArtifactVariant(createTaskArtifactBaseShape, "evidence"),
   taskArtifactVariant(createTaskArtifactBaseShape, "review"),
   taskArtifactVariant(createTaskArtifactBaseShape, "review_result"),
+  taskArtifactVariant(createTaskArtifactBaseShape, "review_feedback"),
 ]);
+
+/**
+ * The part of a draft comment that says where it points. Identical in shape to
+ * a submitted comment's anchor minus the body, so a draft becomes a comment by
+ * gaining one field and nothing else.
+ */
+const reviewDraftAnchorSchema = z.discriminatedUnion("anchor", [
+  z
+    .object({
+      anchor: z.literal("lines"),
+      path: nonBlankStringSchema,
+      side: z.enum(["additions", "deletions"]),
+      startLine: z.number().int().min(1),
+      endLine: z.number().int().min(1),
+      quotedLines: z.array(z.string()),
+    })
+    .strict()
+    .refine((a) => a.endLine >= a.startLine, {
+      path: ["endLine"],
+      message: "must not be before startLine",
+    }),
+  z.object({ anchor: z.literal("file"), path: nonBlankStringSchema }).strict(),
+]);
+
+/** An unsent comment. Lives only until the round it belongs to is submitted. */
+const reviewDraftCommentSchema = z
+  .object({
+    id: idSchema,
+    reviewArtifactId: idSchema,
+    anchor: reviewDraftAnchorSchema,
+    body: nonBlankStringSchema,
+    createdAt: z.string(),
+    updatedAt: z.string(),
+  })
+  .strict();
 
 const taskThreadSchema = z
   .object({
@@ -937,6 +1037,152 @@ export const tasksRpcContract = defineRpcContract({
       })
       .strict(),
   },
+  getReviewDiff: {
+    input: z.object({ artifactId: idSchema }).strict(),
+    output: z.discriminatedUnion("outcome", [
+      z
+        .object({
+          outcome: z.literal("available"),
+          baseRef: nonBlankStringSchema,
+          pinnedHeadSha: nonBlankStringSchema,
+          currentHeadSha: nonBlankStringSchema.nullable(),
+          environmentId: z.string().startsWith("env_"),
+          files: z.array(
+            z
+              .object({
+                path: z.string(),
+                patch: z.string(),
+                truncated: z.boolean(),
+              })
+              .strict(),
+          ),
+        })
+        .strict(),
+      z
+        .object({
+          outcome: z.literal("unavailable"),
+          reason: z.enum([
+            "not_a_review",
+            "artifact_not_found",
+            "no_environment",
+            "diff_unavailable",
+          ]),
+          message: z.string(),
+        })
+        .strict(),
+    ]),
+  },
+
+  // --- Human review of a review artifact -------------------------------
+  //
+  // Drafts live here rather than in the browser so a review begun on a phone
+  // survives the interruption that ends it. They are deleted on submit: the
+  // draft store means "not sent yet" and nothing else, so there is never a
+  // second copy of a comment to keep in step with the artifact.
+
+  listReviewDrafts: {
+    input: z.object({ reviewArtifactId: idSchema }).strict(),
+    output: z
+      .object({
+        comments: z.array(reviewDraftCommentSchema),
+        /** The overall note, saved as you type it. Empty when unwritten. */
+        summary: z.string(),
+      })
+      .strict(),
+  },
+  saveReviewDraftComment: {
+    /** Omit `id` to add; pass one to replace that draft's body in place. */
+    input: z
+      .object({
+        id: idSchema.nullable().default(null),
+        reviewArtifactId: idSchema,
+        anchor: reviewDraftAnchorSchema,
+        body: nonBlankStringSchema,
+      })
+      .strict(),
+    output: z.object({ comment: reviewDraftCommentSchema }).strict(),
+  },
+  deleteReviewDraftComment: {
+    input: z.object({ id: idSchema }).strict(),
+    output: z.object({ deleted: z.boolean() }).strict(),
+  },
+  saveReviewDraftSummary: {
+    input: z.object({ reviewArtifactId: idSchema, body: z.string() }).strict(),
+    output: z.object({ ok: z.literal(true) }).strict(),
+  },
+  /**
+   * Unsent counts for every review artifact on one task, so the artifacts
+   * list can show that a review is half-answered without loading the drafts.
+   */
+  countReviewDrafts: {
+    input: z.object({ taskId: idSchema }).strict(),
+    output: z
+      .object({
+        counts: z.array(
+          z
+            .object({ reviewArtifactId: idSchema, count: z.number().int() })
+            .strict(),
+        ),
+      })
+      .strict(),
+  },
+  /**
+   * Turn every draft on one review into a `review_feedback` artifact and,
+   * unless the verdict is `approve`, post it to a thread. The drafts are gone
+   * afterwards either way.
+   *
+   * `outcome` distinguishes the artifact being written from the message being
+   * delivered: an approval writes the record and sends nothing, and a send
+   * that fails must not silently lose the reviewer's work.
+   */
+  submitReviewFeedback: {
+    input: z
+      .object({
+        reviewArtifactId: idSchema,
+        verdict: z.enum(["approve", "request_changes", "comment"]),
+        /**
+         * Where the round goes. `existing` names one of the task's attached
+         * threads; `new` spawns one from the reviewing thread's preset and
+         * environment and attaches it. Ignored when the verdict is `approve`.
+         */
+        target: z
+          .discriminatedUnion("kind", [
+            z
+              .object({
+                kind: z.literal("existing"),
+                threadId: z.string().startsWith("thr_"),
+              })
+              .strict(),
+            z.object({ kind: z.literal("new") }).strict(),
+          ])
+          .nullable()
+          .default(null),
+      })
+      .strict(),
+    output: z.discriminatedUnion("outcome", [
+      z
+        .object({
+          outcome: z.literal("submitted"),
+          artifactId: idSchema,
+          /** Null when the verdict was `approve` and nothing was posted. */
+          threadId: z.string().startsWith("thr_").nullable(),
+        })
+        .strict(),
+      z
+        .object({
+          outcome: z.literal("failed"),
+          reason: z.enum([
+            "not_a_review",
+            "artifact_not_found",
+            "no_target_thread",
+            "spawn_failed",
+            "send_failed",
+          ]),
+          message: z.string(),
+        })
+        .strict(),
+    ]),
+  },
   createPreset: {
     input: z
       .object({
@@ -1058,6 +1304,26 @@ export const tasksRpcContract = defineRpcContract({
 });
 
 export type TasksRpcContract = typeof tasksRpcContract;
+export type ReviewDraftComment = z.infer<typeof reviewDraftCommentSchema>;
+export type ReviewDraftAnchor = z.infer<typeof reviewDraftAnchorSchema>;
+export type ReviewFeedbackArtifact = Extract<
+  TaskArtifact,
+  { kind: "review_feedback" }
+>;
+export type ReviewFeedbackComment =
+  ReviewFeedbackArtifact["metadata"]["comments"][number];
+export type ReviewVerdict = ReviewFeedbackArtifact["metadata"]["verdict"];
+export type SubmitReviewFeedbackResult = z.infer<
+  (typeof tasksRpcContract)["submitReviewFeedback"]["output"]
+>;
+export type ReviewDiffResult = z.infer<
+  (typeof tasksRpcContract)["getReviewDiff"]["output"]
+>;
+/** The closed set of reasons the diff seam can decline to produce patches. */
+export type ReviewDiffUnavailableReason = Extract<
+  ReviewDiffResult,
+  { outcome: "unavailable" }
+>["reason"];
 export type Folder = z.infer<typeof folderSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Task = z.infer<typeof taskSchema>;

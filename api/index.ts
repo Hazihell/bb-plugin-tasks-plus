@@ -18,6 +18,7 @@ import {
 import { deliverCommentToLatestAgent } from "../steer";
 import { isSideChatShapedThread } from "../shared/side-chat";
 import { isBlockerResolved } from "../shared/blockers";
+import { reviewConcernPaths } from "../shared/review-diff";
 import {
   taskArtifactSchema,
   tasksRpcContract,
@@ -32,7 +33,12 @@ import {
   type TaskStatus,
   type CommentsChangedEvent,
   type CommentProvider,
+  type ReviewDraftComment,
+  type ReviewFeedbackComment,
+  type ReviewVerdict,
+  type ThreadsChangedEvent,
 } from "../shared/contract";
+import { formatReviewFeedbackMessage } from "../shared/review-feedback-message";
 
 interface TaskLabelIdRow {
   task_id: string;
@@ -246,6 +252,11 @@ export function publishCommentsChanged(
     ...(notifiedCount === undefined ? {} : { notifiedCount }),
   };
   bb.realtime.publish("comments:changed", payload);
+}
+
+function publishThreadsChanged(bb: BbPluginApi, taskId: string): void {
+  const payload: ThreadsChangedEvent = { taskId };
+  bb.realtime.publish("threads:changed", payload);
 }
 
 function apiTask(store: TasksApiStore, task: StoredTask): Task {
@@ -598,6 +609,10 @@ interface TaskPullRequestsResult {
  *  `gh` on the host, so a task with many worktrees must not stampede it. */
 const PULL_REQUEST_LOOKUP_CONCURRENCY = 4;
 
+/** Mirrors the host's `environmentDiffPatchRequestSchema.paths` limit. */
+const REVIEW_DIFF_MAX_PATHS_PER_REQUEST = 50;
+const REVIEW_DIFF_BATCH_CONCURRENCY = 4;
+
 /**
  * Run `work` over every item with at most `limit` invocations in flight.
  * Results keep item order. Rejections propagate to the caller.
@@ -732,6 +747,316 @@ async function listTaskPullRequests(
     unavailableThreadIds: [...unavailable].sort(
       (left, right) => orderByThread(left) - orderByThread(right),
     ),
+  };
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function threadEnvironment(
+  bb: BbPluginApi,
+  threadId: string,
+): Promise<string | null> {
+  try {
+    return (await bb.sdk.threads.get({ threadId })).environmentId;
+  } catch {
+    return null;
+  }
+}
+
+async function reviewEnvironment(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  artifact: Extract<ApiTaskArtifact, { kind: "review" }>,
+): Promise<string | null> {
+  if (artifact.metadata.environmentId) return artifact.metadata.environmentId;
+
+  if (artifact.sourceThreadId) {
+    const sourceEnvironment = await threadEnvironment(
+      bb,
+      artifact.sourceThreadId,
+    );
+    if (sourceEnvironment) return sourceEnvironment;
+  }
+
+  const attachedEnvironments = await Promise.all(
+    store.tasks.listTaskThreads(artifact.taskId).map(async (taskThread) => ({
+      threadId: taskThread.threadId,
+      environmentId: await threadEnvironment(bb, taskThread.threadId),
+    })),
+  );
+  return (
+    attachedEnvironments.find((entry) => entry.environmentId)?.environmentId ??
+    null
+  );
+}
+
+type ReviewArtifact = Extract<ApiTaskArtifact, { kind: "review" }>;
+
+class ReviewFeedbackTargetError extends Error {
+  constructor(
+    readonly reason: "no_target_thread" | "spawn_failed",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ReviewFeedbackTargetError";
+  }
+}
+
+function requireReviewArtifact(
+  store: TasksApiStore,
+  artifactId: string,
+): ReviewArtifact {
+  const storedArtifact = store.tasks.getTaskArtifact(artifactId);
+  if (!storedArtifact) {
+    throw new Error(`Task artifact not found: ${artifactId}`);
+  }
+  const artifact = apiArtifact(storedArtifact);
+  if (artifact.kind !== "review") {
+    throw new Error(`Task artifact is not a review: ${artifactId}`);
+  }
+  return artifact;
+}
+
+function feedbackCommentFromDraft(
+  draft: ReviewDraftComment,
+): ReviewFeedbackComment {
+  if (draft.anchor.anchor === "file") {
+    return {
+      anchor: "file",
+      path: draft.anchor.path,
+      body: draft.body,
+    };
+  }
+  return {
+    anchor: "lines",
+    path: draft.anchor.path,
+    side: draft.anchor.side,
+    startLine: draft.anchor.startLine,
+    endLine: draft.anchor.endLine,
+    quotedLines: [...draft.anchor.quotedLines],
+    body: draft.body,
+  };
+}
+
+function recordReviewFeedback(
+  store: TasksApiStore,
+  review: ReviewArtifact,
+  verdict: ReviewVerdict,
+  summary: string,
+  comments: readonly ReviewFeedbackComment[],
+  targetThreadId: string | null,
+): ApiTaskArtifact {
+  const artifact = apiArtifact(
+    store.tasks.createTaskArtifact({
+      taskId: review.taskId,
+      kind: "review_feedback",
+      title: `Feedback on ${review.title}`,
+      metadata: {
+        reviewArtifactId: review.id,
+        verdict,
+        summary,
+        comments: [...comments],
+        headSha: review.metadata.headSha,
+        targetThreadId,
+      },
+    }),
+  );
+  store.tasks.deleteReviewDrafts(review.id);
+  return artifact;
+}
+
+/**
+ * The round is the new thread's opening prompt rather than a message sent
+ * after it starts: one delivery, so a thread can never exist waiting for a
+ * round that failed to arrive.
+ */
+async function spawnReviewFeedbackThread(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  task: StoredTask,
+  review: ReviewArtifact,
+  message: string,
+): Promise<string> {
+  const sourceThreadId = review.sourceThreadId;
+  if (sourceThreadId === null) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      "This review records no reviewing thread, so there is nothing to copy a new thread's settings and environment from.",
+    );
+  }
+
+  let reviewingThread: Awaited<ReturnType<BbPluginApi["sdk"]["threads"]["get"]>>;
+  try {
+    reviewingThread = await bb.sdk.threads.get({ threadId: sourceThreadId });
+  } catch (error) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      `The reviewing thread ${sourceThreadId} could not be read, so a feedback thread cannot be spawned beside it: ${errorMessage(error)}`,
+    );
+  }
+  if (!reviewingThread.environmentId) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      "The reviewing thread has no environment, so a feedback thread has nowhere to run.",
+    );
+  }
+
+  const sourceTaskThread = store.tasks.getTaskThreadByThreadId(
+    task.id,
+    sourceThreadId,
+  );
+  const preset = sourceTaskThread
+    ? store.tasks
+        .listPresets()
+        .find((candidate) => candidate.name === sourceTaskThread.presetName)
+    : undefined;
+  if (!preset) {
+    throw new ReviewFeedbackTargetError(
+      "spawn_failed",
+      "The reviewing thread names no stored preset, so a feedback thread cannot be spawned without guessing its provider, model and permissions.",
+    );
+  }
+
+  const title = `${task.key} · ${review.title} feedback`;
+  const spawned = await bb.sdk.threads.spawn({
+    projectId: reviewingThread.projectId,
+    environment: {
+      type: "reuse",
+      environmentId: reviewingThread.environmentId,
+    },
+    providerId: preset.providerId,
+    model: preset.modelId,
+    reasoningLevel: preset.reasoningLevel,
+    ...(preset.serviceTier === null
+      ? {}
+      : { serviceTier: preset.serviceTier }),
+    permissionMode: preset.permissionMode,
+    title,
+    prompt: message,
+  });
+
+  store.tasks.upsertTaskThread({
+    taskId: task.id,
+    threadId: spawned.id,
+    presetName: preset.name,
+    title,
+    liveStatus: "starting",
+  });
+  publishThreadsChanged(bb, task.id);
+  return spawned.id;
+}
+
+async function getReviewDiff(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  artifactId: string,
+) {
+  const storedArtifact = store.tasks.getTaskArtifact(artifactId);
+  if (!storedArtifact) {
+    return {
+      outcome: "unavailable" as const,
+      reason: "artifact_not_found" as const,
+      message: `Task artifact not found: ${artifactId}`,
+    };
+  }
+
+  const artifact = apiArtifact(storedArtifact);
+  if (artifact.kind !== "review") {
+    return {
+      outcome: "unavailable" as const,
+      reason: "not_a_review" as const,
+      message: `Task artifact is not a review: ${artifactId}`,
+    };
+  }
+
+  const environmentId = await reviewEnvironment(bb, store, artifact);
+  if (!environmentId) {
+    return {
+      outcome: "unavailable" as const,
+      reason: "no_environment" as const,
+      message: "No environment is available for this review",
+    };
+  }
+
+  const paths = reviewConcernPaths(artifact.metadata);
+  let diffs: Array<
+    Awaited<
+      ReturnType<BbPluginApi["sdk"]["environments"]["diffPatch"]>
+    >
+  > = [];
+  if (paths.length > 0) {
+    const pathBatches: string[][] = [];
+    for (
+      let offset = 0;
+      offset < paths.length;
+      offset += REVIEW_DIFF_MAX_PATHS_PER_REQUEST
+    ) {
+      pathBatches.push(
+        paths.slice(offset, offset + REVIEW_DIFF_MAX_PATHS_PER_REQUEST),
+      );
+    }
+
+    try {
+      diffs = await mapWithConcurrency(
+        pathBatches,
+        REVIEW_DIFF_BATCH_CONCURRENCY,
+        async (batchPaths) =>
+          bb.sdk.environments.diffPatch({
+            environmentId,
+            target: {
+              type: "branch_committed",
+              mergeBaseBranch: artifact.metadata.baseRef,
+            },
+            paths: batchPaths,
+          }),
+      );
+    } catch (error) {
+      return {
+        outcome: "unavailable" as const,
+        reason: "diff_unavailable" as const,
+        message: errorMessage(error),
+      };
+    }
+
+    for (const diff of diffs) {
+      if (diff.outcome === "available") continue;
+      return {
+        outcome: "unavailable" as const,
+        reason: "diff_unavailable" as const,
+        message:
+          diff.outcome === "not_applicable"
+            ? diff.message
+            : diff.failure.message,
+      };
+    }
+  }
+
+  const files = diffs.flatMap((diff) =>
+    diff.outcome === "available" ? diff.patches : [],
+  );
+
+  let currentHeadSha: string | null = null;
+  try {
+    const status = await bb.sdk.environments.status({ environmentId });
+    if (status.outcome === "available") {
+      const checkout = status.workspace.checkout;
+      if (checkout.kind === "branch" || checkout.kind === "detached") {
+        currentHeadSha = checkout.headSha;
+      }
+    }
+  } catch {
+    // A patch is still useful when the host cannot answer the optional status check.
+  }
+
+  return {
+    outcome: "available" as const,
+    baseRef: artifact.metadata.baseRef,
+    pinnedHeadSha: artifact.metadata.headSha,
+    currentHeadSha,
+    environmentId,
+    files,
   };
 }
 
@@ -1207,6 +1532,170 @@ export function registerHandlers(
     },
     async listTaskPullRequests(input) {
       return listTaskPullRequests(bb, store, input.taskId);
+    },
+    async getReviewDiff(input) {
+      return getReviewDiff(bb, store, input.artifactId);
+    },
+    listReviewDrafts(input) {
+      const review = requireReviewArtifact(store, input.reviewArtifactId);
+      return {
+        comments: store.tasks.listReviewDraftComments(review.id),
+        summary: store.tasks.getReviewDraftSummary(review.id),
+      };
+    },
+    /*
+     * Draft writes announce nothing. An unsent comment is the reader's own
+     * state, not the task's record, and the reader is its only writer: a
+     * broadcast here would make every subscriber of the task — including the
+     * diff, which resolves an environment and shells out to git — refetch on
+     * each keystroke pause.
+     */
+    saveReviewDraftComment(input) {
+      requireReviewArtifact(store, input.reviewArtifactId);
+      return { comment: store.tasks.saveReviewDraftComment(input) };
+    },
+    deleteReviewDraftComment(input) {
+      return { deleted: store.tasks.deleteReviewDraftComment(input.id) };
+    },
+    saveReviewDraftSummary(input) {
+      const review = requireReviewArtifact(store, input.reviewArtifactId);
+      store.tasks.saveReviewDraftSummary(review.id, input.body);
+      return { ok: true };
+    },
+    countReviewDrafts(input) {
+      return { counts: store.tasks.countReviewDrafts(input.taskId) };
+    },
+    async submitReviewFeedback(input) {
+      const storedArtifact = store.tasks.getTaskArtifact(input.reviewArtifactId);
+      if (!storedArtifact) {
+        return {
+          outcome: "failed" as const,
+          reason: "artifact_not_found" as const,
+          message: `Task artifact not found: ${input.reviewArtifactId}`,
+        };
+      }
+
+      const artifact = apiArtifact(storedArtifact);
+      if (artifact.kind !== "review") {
+        return {
+          outcome: "failed" as const,
+          reason: "not_a_review" as const,
+          message: `Task artifact is not a review: ${input.reviewArtifactId}`,
+        };
+      }
+
+      const task = store.tasks.getTask(artifact.taskId);
+      if (!task) throw new Error(`Task not found: ${artifact.taskId}`);
+      const drafts = store.tasks.listReviewDraftComments(artifact.id);
+      const summary = store.tasks.getReviewDraftSummary(artifact.id);
+      const comments = drafts.map(feedbackCommentFromDraft);
+
+      const message = formatReviewFeedbackMessage({
+        taskKey: task.key,
+        reviewTitle: artifact.title,
+        baseRef: artifact.metadata.baseRef,
+        headSha: artifact.metadata.headSha,
+        verdict: input.verdict,
+        summary,
+        comments,
+      });
+
+      /**
+       * The target is settled before anything is written, because recording
+       * the round clears the drafts: a round with nowhere to go must leave
+       * the reviewer's unsent comments exactly as they were.
+       */
+      let targetThreadId: string | null = null;
+      /** A spawned thread already carries the round as its opening prompt. */
+      let delivered = false;
+
+      if (input.verdict !== "approve") {
+        if (input.target === null) {
+          return {
+            outcome: "failed" as const,
+            reason: "no_target_thread" as const,
+            message:
+              "Nothing was recorded: no target thread was selected for this review feedback round.",
+          };
+        }
+        if (input.target.kind === "existing") {
+          const attached = store.tasks.getTaskThreadByThreadId(
+            task.id,
+            input.target.threadId,
+          );
+          if (!attached) {
+            return {
+              outcome: "failed" as const,
+              reason: "no_target_thread" as const,
+              message: `Nothing was recorded: thread ${input.target.threadId} is not attached to task ${task.key}.`,
+            };
+          }
+          targetThreadId = input.target.threadId;
+        } else {
+          try {
+            targetThreadId = await spawnReviewFeedbackThread(
+              bb,
+              store,
+              task,
+              artifact,
+              message,
+            );
+            delivered = true;
+          } catch (error) {
+            return {
+              outcome: "failed" as const,
+              reason:
+                error instanceof ReviewFeedbackTargetError
+                  ? error.reason
+                  : ("spawn_failed" as const),
+              message: `Nothing was recorded: ${
+                error instanceof ReviewFeedbackTargetError
+                  ? error.message
+                  : `the feedback thread could not be spawned: ${errorMessage(error)}`
+              }`,
+            };
+          }
+        }
+      }
+
+      const feedback = recordReviewFeedback(
+        store,
+        artifact,
+        input.verdict,
+        summary,
+        comments,
+        targetThreadId,
+      );
+      publishTasksChanged(bb, task.id, task.projectId);
+
+      if (targetThreadId === null || delivered) {
+        return {
+          outcome: "submitted" as const,
+          artifactId: feedback.id,
+          threadId: targetThreadId,
+        };
+      }
+
+      try {
+        await bb.sdk.threads.send({
+          threadId: targetThreadId,
+          input: [{ type: "text", text: message, mentions: [] }],
+          mode: "auto",
+        });
+      } catch (error) {
+        // The round is kept: a delivery that failed must not cost the work.
+        return {
+          outcome: "failed" as const,
+          reason: "send_failed" as const,
+          message: `The review feedback round was recorded but not delivered: ${errorMessage(error)}`,
+        };
+      }
+
+      return {
+        outcome: "submitted" as const,
+        artifactId: feedback.id,
+        threadId: targetThreadId,
+      };
     },
     createPreset(input) {
       const preset = store.tasks.createPreset({ ...input, builtin: false });

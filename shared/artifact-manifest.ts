@@ -7,11 +7,11 @@ import {
 /** Human-readable kind names, shared by the manifest and the detail badge. */
 export const TASK_ARTIFACT_KIND_LABELS: Record<TaskArtifactKind, string> = {
   approved_plan: "Approved Plan",
-  implementation_plan: "Implementation Plan",
   decision: "Decision",
   evidence: "Evidence",
   review: "Review",
   review_result: "Review Result",
+  review_feedback: "Review Feedback",
 };
 
 /** How many artifacts of one kind a manifest lists before it summarises. */

@@ -485,7 +485,11 @@ function TaskDetail({ task }: { task: Task }) {
 
           <BlockersSection task={task} onError={(message) => push(message)} />
 
-          <ArtifactsSection artifacts={artifacts.data ?? []} />
+          <ArtifactsSection
+            artifacts={artifacts.data ?? []}
+            taskId={task.id}
+            taskKey={task.key}
+          />
 
           {/* With no attached threads the section disappears entirely; the
               rail's Dispatch button is the entry point. */}

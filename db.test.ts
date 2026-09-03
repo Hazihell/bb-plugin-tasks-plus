@@ -54,12 +54,11 @@ describe("tasks storage", () => {
       createTasksStore(db);
       expect(
         db
-          .prepare<
-            [],
-            { count: number }
-          >("SELECT COUNT(*) AS count FROM schema_version")
+          .prepare<[], { count: number }>(
+            "SELECT COUNT(*) AS count FROM schema_version",
+          )
           .get()?.count,
-      ).toBe(10);
+      ).toBe(12);
     } finally {
       await harness.dispose();
     }
@@ -75,7 +74,7 @@ describe("tasks storage", () => {
         name: "implement",
         providerId: "claude-code",
         modelId: "claude-opus-5[1m]",
-        reasoningLevel: "medium",
+        reasoningLevel: "low",
         serviceTier: null,
         permissionMode: "full",
         environmentKind: "new-worktree",
@@ -83,7 +82,7 @@ describe("tasks storage", () => {
         machineId: null,
         builtin: true,
       });
-      expect(seeded?.instructions).toContain("You are the working thread");
+      expect(seeded?.instructions).toContain("You are the coordinator");
       if (!seeded) throw new Error("expected seeded implement preset");
 
       store.updatePreset(seeded.id, { modelId: "user-selected-model" });
@@ -361,8 +360,10 @@ describe("tasks storage", () => {
           .baseBranch,
       ).toBe(null);
       expect(
-        store.createTask({ projectId: project.id, title: "Uses project target" })
-          .dispatchBbProjectId,
+        store.createTask({
+          projectId: project.id,
+          title: "Uses project target",
+        }).dispatchBbProjectId,
       ).toBe(null);
 
       expect(
@@ -1234,6 +1235,144 @@ describe("tasks storage", () => {
     }
   });
 
+  it("keeps every artifact column in place when the table is rebuilt", async () => {
+    const { db, harness, store } = setup();
+    try {
+      const project = createProject(store, "COL");
+      const task = store.createTask({ projectId: project.id, title: "Rebuild" });
+      const artifact = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        body: "The body",
+        externalUrl: "https://example.test/review",
+        sourceThreadId: "thr_rebuild",
+        metadata: {
+          baseRef: "main",
+          headSha: "abc1234",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+
+      // Replay the rebuild on a database that already holds artifacts: every
+      // value must land back in the column it came from, not the next one.
+      db.exec(`
+        DROP TABLE review_draft_comments;
+        DROP TABLE review_draft_summaries;
+        DELETE FROM schema_version WHERE version = 11;
+      `);
+      createTasksStore(db);
+
+      expect(createTasksStore(db).getTaskArtifact(artifact.id)).toMatchObject({
+        id: artifact.id,
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        body: "The body",
+        externalUrl: "https://example.test/review",
+        sourceThreadId: "thr_rebuild",
+        createdAt: artifact.createdAt,
+      });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("remaps implementation_plan to approved_plan when the kind is retired", async () => {
+    const { harness, db, store } = setup();
+    try {
+      const project = createProject(store, "RET");
+      const task = store.createTask({ projectId: project.id, title: "Retire" });
+      const kept = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "decision",
+        title: "Kept",
+      });
+
+      // Replay from before the retirement: the old kind is legal again, a row
+      // is written with it, and re-running the migration must fold it in.
+      db.exec(`
+        DROP TABLE review_draft_comments;
+        DROP TABLE review_draft_summaries;
+        DELETE FROM schema_version WHERE version IN (11, 12);
+        INSERT INTO schema_version (version, applied_at) VALUES (12, 'pinned');
+      `);
+      createTasksStore(db);
+      db.exec(`DELETE FROM schema_version WHERE version = 12`);
+      db.prepare(
+        `INSERT INTO task_artifacts (id, task_id, kind, title, metadata_json, created_at)
+         VALUES (?, ?, 'implementation_plan', 'Old plan', '{}', ?)`,
+      ).run("01J0000000000000000000RET1", task.id, "2026-07-15T17:00:00.000Z");
+      const migrated = createTasksStore(db);
+
+      expect(migrated.getTaskArtifact("01J0000000000000000000RET1")).toMatchObject({
+        kind: "approved_plan",
+        title: "Old plan",
+      });
+      expect(migrated.getTaskArtifact(kept.id)).toMatchObject({ kind: "decision" });
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO task_artifacts (id, task_id, kind, title, metadata_json, created_at)
+             VALUES ('01J0000000000000000000RET2', ?, 'implementation_plan', 'x', '{}', 'now')`,
+          )
+          .run(task.id),
+      ).toThrow(/CHECK constraint/);
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("moves a review draft comment to another anchor", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "ANC");
+      const task = store.createTask({ projectId: project.id, title: "Anchor" });
+      const review = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Narrative review",
+        metadata: {
+          baseRef: "main",
+          headSha: "abc1234",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+      const draft = store.saveReviewDraftComment({
+        reviewArtifactId: review.id,
+        anchor: {
+          anchor: "lines",
+          path: "src/save.ts",
+          side: "additions",
+          startLine: 3,
+          endLine: 3,
+          quotedLines: ["+  save();"],
+        },
+        body: "The write is not durable yet.",
+      });
+
+      const moved = store.saveReviewDraftComment({
+        id: draft.id,
+        reviewArtifactId: review.id,
+        anchor: { anchor: "file", path: "src/write.ts" },
+        body: "The write is not durable yet.",
+      });
+      expect(moved).toMatchObject({
+        id: draft.id,
+        createdAt: draft.createdAt,
+        anchor: { anchor: "file", path: "src/write.ts" },
+      });
+      expect(store.getReviewDraftComment(draft.id)?.anchor).toEqual({
+        anchor: "file",
+        path: "src/write.ts",
+      });
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("rejects task artifact kinds outside the allowed set", async () => {
     const { db, harness, store } = setup();
     try {
@@ -1274,6 +1413,85 @@ describe("tasks storage", () => {
       });
       expect(store.deleteTask(task.id)).toBe(true);
       expect(store.getTaskArtifact(artifact.id)).toBeUndefined();
+    } finally {
+      await harness.dispose();
+    }
+  });
+
+  it("round-trips review drafts and cascades them with their review artifact", async () => {
+    const { harness, store } = setup();
+    try {
+      const project = createProject(store, "DRF");
+      const task = store.createTask({
+        projectId: project.id,
+        title: "Draft review feedback",
+      });
+      const review = store.createTaskArtifact({
+        taskId: task.id,
+        kind: "review",
+        title: "Review",
+        metadata: {
+          baseRef: "main",
+          headSha: "head-1",
+          environmentId: null,
+          concerns: [],
+        },
+      });
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 0 },
+      ]);
+
+      const line = store.saveReviewDraftComment({
+        id: null,
+        reviewArtifactId: review.id,
+        anchor: {
+          anchor: "lines",
+          path: "src/save.ts",
+          side: "additions",
+          startLine: 4,
+          endLine: 5,
+          quotedLines: ["+save();", "+return result;"],
+        },
+        body: "The result can escape before save completes.",
+      });
+      const edited = store.saveReviewDraftComment({
+        id: line.id,
+        reviewArtifactId: review.id,
+        anchor: line.anchor,
+        body: "The result can escape before save completes.",
+      });
+      const file = store.saveReviewDraftComment({
+        reviewArtifactId: review.id,
+        anchor: { anchor: "file", path: "src/telemetry.ts" },
+        body: "Please cover retries.",
+      });
+      store.saveReviewDraftSummary(review.id, "One more retry test is needed.");
+
+      expect(edited).toMatchObject({
+        id: line.id,
+        createdAt: line.createdAt,
+        anchor: line.anchor,
+      });
+      expect(store.listReviewDraftComments(review.id)).toEqual([
+        edited,
+        file,
+      ]);
+      expect(store.getReviewDraftSummary(review.id)).toBe(
+        "One more retry test is needed.",
+      );
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 2 },
+      ]);
+      expect(store.deleteReviewDraftComment(line.id)).toBe(true);
+      expect(store.deleteReviewDraftComment(line.id)).toBe(false);
+      expect(store.countReviewDrafts(task.id)).toEqual([
+        { reviewArtifactId: review.id, count: 1 },
+      ]);
+
+      expect(store.deleteTaskArtifact(review.id)).toBe(true);
+      expect(store.listReviewDraftComments(review.id)).toEqual([]);
+      expect(store.getReviewDraftSummary(review.id)).toBe("");
+      expect(store.countReviewDrafts(task.id)).toEqual([]);
     } finally {
       await harness.dispose();
     }
@@ -1482,7 +1700,7 @@ describe("tasks storage", () => {
       const task = store.createTask({ projectId: project.id, title: "Blank" });
       const artifact = store.createTaskArtifact({
         taskId: task.id,
-        kind: "implementation_plan",
+        kind: "approved_plan",
         title: "  Plan  ",
         body: "   ",
         externalUrl: "",
@@ -1504,7 +1722,7 @@ describe("tasks storage", () => {
       expect(() =>
         store.createTaskArtifact({
           taskId: task.id,
-          kind: "implementation_plan",
+          kind: "approved_plan",
           title: "Bad thread",
           sourceThreadId: "abc",
         }),

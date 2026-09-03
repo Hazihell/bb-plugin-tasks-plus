@@ -31,12 +31,20 @@ export interface ListPreference {
    * older document is discarded.
    */
   collapsedStatuses: TaskStatus[];
+  /**
+   * Parents whose subtasks are showing. A task id names a row in exactly one
+   * scope, so this is stored per scope like the rest; an id whose task is gone
+   * is kept rather than pruned, because storage cannot tell a deleted task
+   * from one the current filter hid.
+   */
+  expandedParents: string[];
 }
 
 export const DEFAULT_LIST_PREFERENCE: ListPreference = {
   filters: EMPTY_FILTERS,
   sort: "manual",
   collapsedStatuses: [],
+  expandedParents: [],
 };
 
 interface StoredDocumentV1 {
@@ -86,12 +94,12 @@ function uniqueValidPriorities(values: unknown): TaskPriority[] {
 }
 
 /**
- * Label selections are stored by name (matching the filter UI). Unknown or
- * deleted names are kept so a temporary empty label catalog does not wipe the
- * user's selection; once the catalog is loaded, unresolved names force an
- * empty match set in the list query (see ListView).
+ * A stored list of names or ids: trimmed, de-duplicated, order preserved, and
+ * never checked against a catalog. Nothing here knows whether a value still
+ * resolves, and dropping the ones that do not would let a catalog that has not
+ * loaded yet erase the user's selection.
  */
-function uniqueLabelNames(values: unknown): string[] {
+function uniqueTrimmedStrings(values: unknown): string[] {
   if (!Array.isArray(values)) return [];
   const seen = new Set<string>();
   const result: string[] = [];
@@ -117,6 +125,7 @@ function defaultPreference(): ListPreference {
     filters: { ...EMPTY_FILTERS },
     sort: DEFAULT_LIST_PREFERENCE.sort,
     collapsedStatuses: [],
+    expandedParents: [],
   };
 }
 
@@ -136,10 +145,13 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
     filters: {
       statuses: uniqueValidStatuses(filtersRaw.statuses),
       priorities: uniqueValidPriorities(filtersRaw.priorities),
-      labelNames: uniqueLabelNames(filtersRaw.labelNames),
+      // Labels are selected by name, matching the filter UI. An unresolved
+      // name forces an empty match set in the list query (see ListView).
+      labelNames: uniqueTrimmedStrings(filtersRaw.labelNames),
     },
     sort: sanitizeSort(record.sort),
     collapsedStatuses: uniqueValidStatuses(record.collapsedStatuses),
+    expandedParents: uniqueTrimmedStrings(record.expandedParents),
   };
 }
 

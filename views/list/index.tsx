@@ -139,18 +139,21 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   const [newTaskOpen, setNewTaskOpen] = useState(false);
   // Parent whose "New subtask" menu item was chosen; drives the second dialog.
   const [subtaskParent, setSubtaskParent] = useState<Task | null>(null);
-  // Which parents are currently showing their subtasks. Collapsed by default,
-  // and deliberately ordinary component state: expansion is a momentary
-  // reading posture, not part of the persisted list preference.
-  const [expandedParents, setExpandedParents] = useState<ReadonlySet<string>>(
-    () => new Set(),
+  // Which parents are showing their subtasks. Collapsed by default, and
+  // remembered per list surface like the filters and the collapsed groups: a
+  // parent a user opened to work under is a standing choice, not a posture
+  // they should have to retake after every reload.
+  const expandedParents = useMemo(
+    (): ReadonlySet<string> => new Set(preference.expandedParents),
+    [preference.expandedParents],
   );
   const toggleExpanded = (taskId: string) => {
-    setExpandedParents((current) => {
-      const next = new Set(current);
-      if (!next.delete(taskId)) next.add(taskId);
-      return next;
-    });
+    updatePreference((current) => ({
+      ...current,
+      expandedParents: current.expandedParents.includes(taskId)
+        ? current.expandedParents.filter((value) => value !== taskId)
+        : [...current.expandedParents, taskId],
+    }));
   };
 
   const labelProjectIds = useMemo(

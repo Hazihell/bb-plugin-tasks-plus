@@ -741,6 +741,90 @@ describe("task delegation", () => {
     await harness.dispose();
   });
 
+  it("seeds parent, resolved blockers, human feedback, and the latest handoff", async () => {
+    const { bb, harness } = createFakePluginHost({
+      pluginId: "tasks",
+      sdk: {
+        threads: {
+          spawn: async () => ({ id: "thr_packet" }),
+          get: async () =>
+            makeThreadResponse({ id: "thr_packet", status: "starting" }),
+        },
+      },
+    });
+    const store = createStore(bb);
+    const project = store.tasks.createProject({
+      name: "Packet delegation",
+      prefix: "PACK",
+      color: "blue",
+      linkedBbProjectId: "proj_bb",
+    });
+    const parent = store.tasks.createTask({
+      projectId: project.id,
+      title: "Parent goal",
+      description: "Preserve the parent contract.",
+    });
+    const blocker = store.tasks.createTask({
+      projectId: project.id,
+      title: "Published dependency",
+      status: "done",
+    });
+    const task = store.tasks.createTask({
+      projectId: project.id,
+      parentTaskId: parent.id,
+      title: "Consume the dependency",
+    });
+    store.tasks.addTaskBlocker({
+      blockerTaskId: blocker.id,
+      blockedTaskId: task.id,
+    });
+    store.tasks.createComment({
+      taskId: task.id,
+      kind: "system",
+      authorName: "Tasks",
+      body: "Internal status noise",
+    });
+    store.tasks.createComment({
+      taskId: task.id,
+      kind: "user",
+      authorName: "Reviewer",
+      body: "Keep the public wording.",
+    });
+    store.tasks.createComment({
+      taskId: task.id,
+      kind: "agent",
+      authorName: "Old worker",
+      body: "Superseded handoff",
+    });
+    store.tasks.createComment({
+      taskId: task.id,
+      kind: "agent",
+      authorName: "Current worker",
+      body: "Current handoff",
+    });
+    registerDelegation(bb, store);
+
+    await harness.callRpc("delegate", {
+      taskId: task.id,
+      presetId: createTestPreset(store).id,
+    });
+
+    const [[spawn]] = harness.sdk.callsTo("threads.spawn") as [
+      [{ prompt: string }],
+    ];
+    expect(spawn.prompt).toContain(`${parent.key} · Parent goal`);
+    expect(spawn.prompt).toContain("Preserve the parent contract.");
+    expect(spawn.prompt).toContain(
+      `${blocker.key} · Published dependency (done)`,
+    );
+    expect(spawn.prompt).toContain("Keep the public wording.");
+    expect(spawn.prompt).toContain("Current handoff");
+    expect(spawn.prompt).not.toContain("Internal status noise");
+    expect(spawn.prompt).not.toContain("Superseded handoff");
+
+    await harness.dispose();
+  });
+
   it("self-attaches an existing thread through taskThreadsAttach", async () => {
     const { bb, harness } = createFakePluginHost({
       pluginId: "tasks",
@@ -945,6 +1029,9 @@ describe("delegation seed prompt", () => {
     expect(
       buildSeedPrompt({
         task,
+        parent: null,
+        parentDirection: null,
+        blockers: [],
         project,
         dispatchTarget: {
           bbProjectId: "proj_tasks",
@@ -983,6 +1070,14 @@ describe("delegation seed prompt", () => {
 
       - Name: Tasks plugin
       - Linked bb project: proj_tasks (from the project)
+
+      ## Parent
+
+      None.
+
+      ## Blocked by
+
+      None.
 
       ## Sub-tasks
 
@@ -1056,6 +1151,9 @@ describe("delegation seed prompt", () => {
     expect(
       buildSeedPrompt({
         task,
+        parent: null,
+        parentDirection: null,
+        blockers: [],
         project,
         dispatchTarget: {
           bbProjectId: "proj_tasks",
@@ -1069,5 +1167,85 @@ describe("delegation seed prompt", () => {
         presetInstructions: "",
       }),
     ).toContain("## Artifacts\n\nNone.");
+  });
+
+  describe("the Parent section", () => {
+    const base = {
+      blockers: [],
+      project: {
+        id: "01J00000000000000000000001",
+        prefix: "TASK",
+        name: "Tasks plugin",
+        description: "",
+        folderId: null,
+        nextTaskNumber: 3,
+        baseBranch: null,
+        dispatchBbProjectId: null,
+        createdAt: "2026-07-15T17:00:00.000Z",
+        updatedAt: "2026-07-15T17:00:00.000Z",
+      } as Project,
+      dispatchTarget: {
+        bbProjectId: "proj_tasks",
+        scope: "project" as const,
+        ancestorKey: null,
+      },
+      subtasks: [],
+      artifacts: [],
+      attachments: [],
+      recentComments: [],
+      presetInstructions: "",
+    };
+    const task: Task = {
+      id: "01J00000000000000000000003",
+      projectId: base.project.id,
+      number: 2,
+      key: "TASK-2",
+      title: "Slice one",
+      description: "Build the seam.",
+      status: "todo",
+      priority: "none",
+      dueDate: null,
+      parentTaskId: "01J00000000000000000000002",
+      baseBranch: null,
+      dispatchBbProjectId: null,
+      position: 1_024,
+      createdAt: "2026-07-15T17:01:00.000Z",
+      updatedAt: "2026-07-15T17:01:00.000Z",
+    };
+    const parent: Task = {
+      ...task,
+      id: "01J00000000000000000000002",
+      number: 1,
+      key: "TASK-1",
+      title: "The feature",
+      parentTaskId: null,
+      description:
+        "## Goal\n\nMake it work.\n\nDelivery: branch only\n\n## User Stories\n\n1. As a user…",
+    };
+
+    it("carries the Goal section, the direction and a pointer to the rest", () => {
+      const prompt = buildSeedPrompt({
+        ...base,
+        task,
+        parent,
+        parentDirection: "## Boundaries\n\nOne seam.",
+      });
+      expect(prompt).toContain(
+        "## Parent\n\n- TASK-1 · The feature\n\nMake it work.\n\nDelivery: branch only\n\n### Direction\n\n## Boundaries\n\nOne seam.\n\nEverything else about the parent: bb tasks-plus show TASK-1",
+      );
+      expect(prompt).not.toContain("User Stories");
+    });
+
+    it("falls back to the first paragraph and omits Direction without one", () => {
+      const prompt = buildSeedPrompt({
+        ...base,
+        task,
+        parent: { ...parent, description: "Plain goal.\n\nMore detail." },
+        parentDirection: null,
+      });
+      expect(prompt).toContain("- TASK-1 · The feature\n\nPlain goal.\n\nEverything else");
+      expect(prompt).not.toContain("### Direction");
+      expect(prompt).not.toContain("More detail");
+    });
   });
 });

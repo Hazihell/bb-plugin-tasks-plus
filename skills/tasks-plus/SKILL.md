@@ -16,7 +16,7 @@ bb tasks-plus preset create --name "Codex high" --provider codex \
 
 `--service-tier none` clears a tier.
 
-A preset's instructions ride on every seed prompt it dispatches, so a working thread's lifecycle belongs in the preset rather than in each task description. The shipped `implement` preset is that lifecycle: one thread owns the task end to end — read, investigate, plan as an artifact, build test-first, evidence and decisions as it goes, `/review-record`, `/narrative-review`, PR, `in_review` — and never splits it into new tasks. It names only skills this plugin bundles, so it works on an install with no personal skills.
+A preset's instructions ride on every seed prompt it dispatches, so a working thread's lifecycle belongs in the preset rather than in each task description. The shipped `implement` preset keeps one coordinator responsible end to end while fresh BB child threads, in the roles the custom instructions name, build and review. The narrative review is the normal durable record; decisions, evidence and review results are added only when another reader must trust them independently. A dispatch packet carries the task, and for a subtask the parent's `## Goal` section and newest `approved_plan` body, so a slice starts with the whole goal; the rest of the parent is fetched on demand with `show`.
 
 The plugin owns that preset's name and instructions: seeded on first open, restored on every later open, refused for editing or deletion. Provider, model, reasoning, permission and environment stay yours to change and survive every refresh. `bb tasks-plus preset show implement` prints the live text.
 
@@ -36,7 +36,7 @@ The plugin owns that preset's name and instructions: seeded on first open, resto
    bb tasks-plus attachment get <attachment-id> --out <path>
    ```
 
-3. Do the work, commenting once at each meaningful milestone — a completed investigation, an implementation ready for validation, a concrete blocker. Say what changed or was learned, what validation ran, and what risk or blocker remains.
+3. Do the work. Comment only when a human needs a durable milestone, blocker, or final hand-back; worker progress and review dispositions stay in their threads.
 
    ```sh
    bb tasks-plus comment ABC-12 --body "Implemented the change; focused validation now passes."
@@ -83,7 +83,14 @@ The plugin owns that preset's name and instructions: seeded on first open, resto
 
 ## Artifacts
 
-Comments narrate; artifacts are the durable record. Add one whenever the work produces something a later reader must be able to trust.
+The narrative `review` is the normal durable engineering record. Add another artifact only when it must stand on its own for a later task, approval, or audit:
+
+- `approved_plan` for the direction a task graph is built to, written on the parent by `to-spec-and-design`;
+- `decision` when later work must inherit the choice;
+- `evidence` when validation needs an independently durable record;
+- `review_result` when findings remain unresolved, an audit requires it, or the user requests it.
+
+Task-local reasoning and final validation belong in the narrative review.
 
 ```sh
 bb tasks-plus artifact add ABC-12 --kind evidence \
@@ -92,10 +99,10 @@ bb tasks-plus artifact add ABC-12 --kind evidence \
 
 `--meta-file` is required and holds a JSON object — a file, never shell-quoted JSON — whose fields depend on the kind:
 
-- `approved_plan`, `implementation_plan` — `approvedBy`, `approvedAt` (`YYYY-MM-DD`)
+- `approved_plan` — `approvedBy`, `approvedAt` (`YYYY-MM-DD`)
 - `decision` — `discovery`, `decision`, `why`, `impact`
 - `evidence` — `command`, `exitCode`, `evidenceKind` (`unit`, `integration`, `e2e`, `contract`, `static`, `type`, `architecture`, `benchmark`, `security`, `manual`)
-- `review` — `baseRef`, `headSha`, `environmentId`, `concerns`
+- `review` — `baseRef`, `headSha`, `environmentId`, `concerns`, and optional `validation` entries with `command`, `result` (`passed`, `failed`, `not_run`), and `summary`
 - `review_result` — `verdict` (`pass`/`fail`/`mixed`), `findingCounts`
 
 Add `--body` or `--body-file` for the narrative, `--url` for an external link, and `--attach <path>` to store a payload alongside the artifact in one call. Run inside an agent thread and the artifact records which thread wrote it.

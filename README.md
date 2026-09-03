@@ -81,17 +81,18 @@ The plugin ships the skills under `skills/`:
 - `narrative-review` — writes a reviewed change up for a human as a `review`
   artifact: concerns grouped by behaviour rather than by file, each with the
   reason it exists and the few line ranges worth reading, pinned to one commit.
-- `to-spec-and-design` — turns a conversation into a spec, a system design and
-  a breakdown into tracer-bullet subtasks, all approved at one gate. It
-  publishes the parent task with the spec as its description and the design as
-  an `approved-plan.md` attachment, then one child per slice in dependency
-  order, with parent and blocked-by as real relations. A feature that is one
-  slice publishes as one task.
-- `review-record` — reviews the changes since a fixed point along two parallel
-  axes, Standards and Spec, and persists the aggregate as a `review_result`
-  artifact on the originating task, with one comment pointing at it. The task is
-  both the spec the Spec axis is briefed from and the record's destination, so
-  one lookup fixes what is judged and where the result lands.
+- `to-spec-and-design` — turns a conversation into a spec, a direction and a
+  breakdown into tracer-bullet slices, all approved at one gate that also fixes
+  the base branch and the delivery. It publishes the parent with the spec as
+  its description and the direction as an `approved_plan` artifact, then one
+  child per slice in dependency order with blocked-by edges recorded before
+  any child is labelled ready, and closes the parent out against the direction
+  once every slice is done. A feature that is one slice publishes as one task.
+- `review-record` — reviews the changes since a fixed point along two axes,
+  Standards and Spec, with the Spec axis briefed from the task and its parent's
+  direction. Findings stay with the reviewer thread that raised them until each
+  is fixed or accepted with a reason; a `review_result` artifact is persisted
+  only when findings remain open or an audit needs it.
 
 `to-spec-and-design` is a fork of Matt Pocock's `to-spec`, extended with a
 system-design phase and with the decomposition step from his `to-tickets`, and

@@ -156,27 +156,41 @@ function embedAriaLabel(task: Task): string {
   return `${parts.join(", ")} — open in side panel`;
 }
 
-export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
-  const navigate = useBbNavigate();
-  const taskKey = attributes.key?.trim() ?? "";
-  const fallbackTitle = attributes.title?.trim() || null;
-  const validKey = TASK_KEY_PATTERN.test(taskKey);
-  const { state, retry } = useTaskEmbed(validKey ? taskKey : "");
+/** The one notice both directive cards show for a missing or malformed key. */
+function InvalidTaskNotice() {
+  return (
+    <div className="my-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+      Invalid task link. Expected a task key like TSK-4.
+    </div>
+  );
+}
 
-  if (!validKey) {
-    return (
-      <div className="my-3 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-        Invalid task link. Expected a task key like TSK-4.
-      </div>
-    );
-  }
-
+/**
+ * Everything both directive cards show before a task resolves. The states are
+ * the same shape in each — only the loading announcement and the not-found
+ * glyph differ — so the card itself begins where `found` begins.
+ */
+function UnresolvedCard({
+  state,
+  taskKey,
+  fallbackTitle,
+  loadingLabel,
+  notFoundIcon,
+  retry,
+}: {
+  state: Exclude<TaskEmbedState, { kind: "found" }>;
+  taskKey: string;
+  fallbackTitle: string | null;
+  loadingLabel: string;
+  notFoundIcon: React.ReactNode;
+  retry: () => void;
+}) {
   if (state.kind === "loading") {
     return (
       <CardShell>
         <div
           role="status"
-          aria-label={`Loading task ${taskKey}`}
+          aria-label={loadingLabel}
           className="flex min-w-0 flex-1 items-center gap-2 px-1"
         >
           <Skeleton className="size-3.5 shrink-0 rounded-full" />
@@ -199,7 +213,7 @@ export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
     return (
       <CardShell dashed>
         <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
-          <StatusIcon status="backlog" />
+          {notFoundIcon}
           <span className="shrink-0 font-mono text-xs text-muted-foreground">
             {taskKey}
           </span>
@@ -214,25 +228,46 @@ export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
     );
   }
 
-  if (state.kind === "error") {
+  return (
+    <CardShell dashed>
+      <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
+        <Icon
+          name="AlertCircle"
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">
+          {taskKey}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
+          Couldn't load this task
+        </span>
+      </div>
+      <Button variant="ghost" size="sm" className="shrink-0" onClick={retry}>
+        Retry
+      </Button>
+    </CardShell>
+  );
+}
+
+export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
+  const navigate = useBbNavigate();
+  const taskKey = attributes.key?.trim() ?? "";
+  const fallbackTitle = attributes.title?.trim() || null;
+  const validKey = TASK_KEY_PATTERN.test(taskKey);
+  const { state, retry } = useTaskEmbed(validKey ? taskKey : "");
+
+  if (!validKey) return <InvalidTaskNotice />;
+
+  if (state.kind !== "found") {
     return (
-      <CardShell dashed>
-        <div className="flex min-w-0 flex-1 items-center gap-2 px-1">
-          <Icon
-            name="AlertCircle"
-            className="size-3.5 shrink-0 text-muted-foreground"
-          />
-          <span className="shrink-0 font-mono text-xs text-muted-foreground">
-            {taskKey}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-            Couldn't load this task
-          </span>
-        </div>
-        <Button variant="ghost" size="sm" className="shrink-0" onClick={retry}>
-          Retry
-        </Button>
-      </CardShell>
+      <UnresolvedCard
+        state={state}
+        taskKey={taskKey}
+        fallbackTitle={fallbackTitle}
+        loadingLabel={`Loading task ${taskKey}`}
+        notFoundIcon={<StatusIcon status="backlog" />}
+        retry={retry}
+      />
     );
   }
 
@@ -282,6 +317,84 @@ export function TaskDirectiveCard({ attributes }: PluginMessageDirectiveProps) {
       <OpenInTasksButton
         label={`Open ${task.key} in Tasks`}
         subPath={taskDetailSubPath(task.key)}
+      />
+    </CardShell>
+  );
+}
+
+function reviewSubPath(taskKey: string): string {
+  return tasksRouteToSubPath({ kind: "review", taskKey, artifactId: null });
+}
+
+/**
+ * `::review{task="TSK-4"}` chat embeds: the same quiet row as the task card,
+ * but the row opens the task's newest review as a document in the Tasks app.
+ * It is only a launcher — no diff is fetched here.
+ */
+export function ReviewDirectiveCard({
+  attributes,
+}: PluginMessageDirectiveProps) {
+  const navigate = useBbNavigate();
+  const taskKey = attributes.task?.trim() ?? "";
+  const fallbackTitle = attributes.title?.trim() || null;
+  const validKey = TASK_KEY_PATTERN.test(taskKey);
+  const { state, retry } = useTaskEmbed(validKey ? taskKey : "");
+
+  if (!validKey) return <InvalidTaskNotice />;
+
+  if (state.kind !== "found") {
+    return (
+      <UnresolvedCard
+        state={state}
+        taskKey={taskKey}
+        fallbackTitle={fallbackTitle}
+        loadingLabel={`Loading review for ${taskKey}`}
+        notFoundIcon={
+          <Icon
+            name="FileText"
+            className="size-3.5 shrink-0 text-muted-foreground"
+          />
+        }
+        retry={retry}
+      />
+    );
+  }
+
+  const { task } = state;
+  return (
+    <CardShell>
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        aria-label={`Review of ${task.key} — ${task.title} — open in Tasks`}
+        onClick={() =>
+          navigate.toPluginPanel(PANEL_PATH, {
+            subPath: reviewSubPath(task.key),
+          })
+        }
+      >
+        <span aria-hidden>
+          <Icon name="FileText" className="size-3.5 text-muted-foreground" />
+        </span>
+        <span
+          aria-hidden
+          className="shrink-0 font-mono text-xs text-muted-foreground"
+        >
+          {task.key}
+        </span>
+        <span
+          aria-hidden
+          className="min-w-0 flex-1 truncate text-sm font-medium"
+        >
+          {task.title}
+        </span>
+        <span aria-hidden className="shrink-0 text-xs text-muted-foreground">
+          Review
+        </span>
+      </button>
+      <OpenInTasksButton
+        label={`Open ${task.key} review in Tasks`}
+        subPath={reviewSubPath(task.key)}
       />
     </CardShell>
   );

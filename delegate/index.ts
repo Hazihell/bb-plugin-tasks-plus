@@ -6,6 +6,8 @@ import type {
   Preset,
   Project,
   Task,
+  TaskArtifact,
+  TaskBlocker,
   TasksStore,
   TaskThreadLiveStatus,
 } from "../db";
@@ -21,10 +23,12 @@ import {
 } from "../shared/contract";
 import {
   formatArtifactManifest,
+  orderArtifactsByKindThenNewest,
   type ManifestArtifact,
 } from "../shared/artifact-manifest";
 import { delegationRpcContract } from "./contract";
 import { resolveBaseBranch } from "../shared/base-branch";
+import { extractGoalSection } from "../shared/goal-section";
 import {
   describeDispatchTargetOrigin,
   resolveDispatchTarget,
@@ -68,6 +72,10 @@ class DelegationError extends Error {
 
 interface SeedPromptInput {
   task: Task;
+  parent: Task | null;
+  /** Body of the parent's newest `approved_plan`, when it has one. */
+  parentDirection: string | null;
+  blockers: readonly TaskBlocker[];
   project: Project;
   subtasks: readonly Task[];
   artifacts: readonly ManifestArtifact[];
@@ -86,6 +94,41 @@ function formatSubtasks(subtasks: readonly Task[]): string {
   if (subtasks.length === 0) return "None.";
   return subtasks
     .map((subtask) => `- ${subtask.key} · ${subtask.title} (${subtask.status})`)
+    .join("\n");
+}
+
+/**
+ * What a child needs from its parent to start with the whole goal: the goal
+ * paragraph and the direction, eagerly; a pointer to the rest.
+ */
+function formatParent(parent: Task | null, direction: string | null): string {
+  if (parent === null) return "None.";
+  const goal = extractGoalSection(parent.description);
+  const parts = [
+    `- ${parent.key} · ${parent.title}`,
+    goal || "No description provided.",
+  ];
+  if (direction !== null && direction.trim() !== "") {
+    parts.push(`### Direction\n\n${direction.trim()}`);
+  }
+  parts.push(`Everything else about the parent: bb tasks-plus show ${parent.key}`);
+  return parts.join("\n\n");
+}
+
+/** The newest approved plan with a body, or null. */
+function newestDirection(
+  artifacts: readonly Pick<TaskArtifact, "id" | "kind" | "title" | "createdAt" | "body">[],
+): string | null {
+  const plans = orderArtifactsByKindThenNewest(
+    artifacts.filter((artifact) => artifact.kind === "approved_plan"),
+  );
+  return plans.find((plan) => plan.body !== null)?.body ?? null;
+}
+
+function formatBlockers(blockers: readonly TaskBlocker[]): string {
+  if (blockers.length === 0) return "None.";
+  return blockers
+    .map((blocker) => `- ${blocker.key} · ${blocker.title} (${blocker.status})`)
     .join("\n");
 }
 
@@ -129,6 +172,8 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
       "Project context",
       `- Name: ${input.project.name}\n${formatDispatchTarget(input.dispatchTarget)}`,
     ),
+    markdownSection("Parent", formatParent(input.parent, input.parentDirection)),
+    markdownSection("Blocked by", formatBlockers(input.blockers)),
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
     // Above Attachments on purpose: the engineering record outranks files.
     markdownSection(
@@ -158,6 +203,16 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
   }
 
   return `${sections.join("\n\n")}\n`;
+}
+
+function selectRelevantComments(comments: readonly Comment[]): Comment[] {
+  const human = comments.filter((comment) => comment.kind === "user").slice(-3);
+  const latestAgent = [...comments]
+    .reverse()
+    .find((comment) => comment.kind === "agent");
+  return [...human, ...(latestAgent === undefined ? [] : [latestAgent])].sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt),
+  );
 }
 
 function delegatedThreadTitle(task: Task): string {
@@ -344,7 +399,7 @@ export function handlers(
       }
       const preset = requirePreset(store.tasks, input.presetId);
       const comments = store.tasks.listComments(task.id);
-      const recentComments = comments.slice(-5);
+      const recentComments = selectRelevantComments(comments);
       const title = delegatedThreadTitle(task);
       const execution = presetExecutionSchema.parse({
         providerId: preset.providerId,
@@ -353,8 +408,22 @@ export function handlers(
         serviceTier: preset.serviceTier,
         permissionMode: preset.permissionMode,
       });
+      const parent =
+        task.parentTaskId === null
+          ? null
+          : (store.tasks.getTask(task.parentTaskId) ?? null);
       const prompt = buildSeedPrompt({
         task,
+        parent,
+        parentDirection:
+          parent === null
+            ? null
+            : newestDirection(
+                store.tasks.listTaskArtifacts(parent.id, {
+                  kinds: ["approved_plan"],
+                }),
+              ),
+        blockers: store.tasks.listTaskBlockers(task.id),
         project,
         dispatchTarget,
         subtasks: store.tasks.listSubtasks(task.id),

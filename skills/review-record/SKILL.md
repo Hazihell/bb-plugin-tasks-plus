@@ -1,21 +1,16 @@
 ---
 name: review-record
-description: "Two-axis review of the changes since a fixed point, recorded as a durable review_result artifact on the originating task."
+description: "Two-axis review of changes since a fixed point, using one Sol reviewer for a small task or independent Sol reviewers for a complex task, with targeted verification after fixes."
 ---
 
-Two-axis review of the diff between `HEAD` and a fixed point, recorded on the
-task that asked for the work:
+Two-axis review of the diff between `HEAD` and a fixed point for the task that
+asked for the work:
 
 - **Standards**: does the code conform to this repo's documented coding standards?
 - **Spec**: does the code faithfully implement the originating task?
 
-The task is both the spec and the destination. One lookup fixes what the review
-is judged against and where the result lands, so a review is always recorded
-against the task that briefed it.
-
-Tasks Plus is the tracker: `bb tasks-plus`, commands in the `tasks-plus` skill. A
-`review_result` is a Tasks Plus record, so a repo on another tracker puts this
-skill out of scope rather than redirecting it.
+The task is the spec. Tasks Plus is the tracker: `bb tasks-plus`, commands in the
+`tasks-plus` skill. The coordinator is the sole task writer.
 
 ## Process
 
@@ -38,7 +33,7 @@ git log <fixed-point>..HEAD --oneline
 The diff command for the rest of this skill is `git diff <fixed-point>...HEAD`
 — three-dot, so the comparison is against the merge-base. Confirm here that the
 fixed point resolves and the diff is non-empty; a bad ref or empty diff fails
-here rather than inside two parallel agents.
+here rather than inside a reviewer thread.
 
 ### 2. Resolve the task — the spec and the destination
 
@@ -48,19 +43,14 @@ ask.
 
 ```sh
 bb tasks-plus show <KEY> --json
-bb tasks-plus artifact list <KEY> --kind approved_plan --kind implementation_plan --json
+bb tasks-plus artifact list <KEY> --kind approved_plan --json
 bb tasks-plus artifact show <artifact-id>
 ```
 
-The description is the spec; the plan artifacts are what the builder was told to
-follow. Collect the design too: `to-spec-and-design` publishes it as an
-`approved-plan.md` **attachment** rather than an artifact, so fetch any
-attachment whose name says plan or design, from the `attachments` in
-`show --json`:
-
-```sh
-bb tasks-plus attachment get <attachment-id> --out <path>
-```
+The description is the spec. The direction is the newest `approved_plan`
+artifact, and for a slice it lives on the **parent**: read `parentTaskId` from
+`show --json` and list the parent's artifacts too. The Spec axis judges the
+diff against both.
 
 Stop here if the key fails to resolve or names a task unrelated to the commits —
 no task means no record, so there is nothing to review into.
@@ -83,7 +73,7 @@ ch.3) that applies even when a repo documents nothing. Two rules bind it:
   Feature Envy"), never a hard violation. Like any standard here, skip anything
   tooling already enforces.
 
-Each smell reads *what it is* → *how to fix*; match it against the diff:
+Each smell reads _what it is_ → _how to fix_; match it against the diff:
 
 - **Mysterious Name**: a function, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
 - **Duplicated Code**: the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
@@ -98,32 +88,40 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man**: a class or function that mostly just delegates onward. → cut it, call the real target direct.
 - **Refused Bequest**: a subclass or implementer that ignores or overrides most of what it inherits. → drop the inheritance, use composition.
 
-### 4. Dispatch both axes in parallel
+### 4. Choose the review shape
 
-You are the sole writer. Each agent gets exactly one axis and no task key, and
-returns a report; separate contexts are what keep one axis from polluting the
-other, and a dead axis costs nothing to clean up.
+A **small** change is one cohesive behaviour in one layer or module with no
+public API, cross-package contract, schema or migration, auth/security,
+concurrency/lifecycle, architectural change, significant interaction or
+accessibility behaviour, material deviation, or several independent concerns.
+Everything else is **complex**.
 
-Whoever the environment names as reviewer runs both axes; absent any
-instruction, two `general-purpose` sub-agents. Dispatch them in one message so
-they run concurrently, titled `review/standards: <fixed-point>..HEAD` and
-`review/spec: <fixed-point>..HEAD`. When the reviewer is a bb thread, the
-**codex** skill holds the spawn mechanics.
+- Small: one fresh BB child thread reviews both axes and returns separate
+  `## Standards` and `## Spec` sections.
+- Complex: two fresh BB child threads run concurrently, one per axis.
 
-Four rules belong **inside each prompt**:
+Every axis runs as the **reviewer** role: a small review and the Standards
+axis at its default level, the Spec axis of a complex review at its high
+level. The role and its levels are named in
+the custom instructions, which also fix what a reviewer thread may and may not
+do. Use the **bb-cli** skill for spawn mechanics.
 
-- **The agent does the review itself.** It reads the diff and writes the report
-  with its own eyes, spawning nothing and delegating no further. State this
-  explicitly; without it the agent re-delegates and you get a summary of a
-  summary.
-- **Read-only.** It reports findings and changes no files, writes no scratch
-  notes, and runs no command that mutates the repo. `git diff`, `git log`, and
-  reading files are the whole toolkit.
+A provider limit pauses an axis rather than changing its reviewer. Check
+`bb provider-retry status <thread-id>`; when a retry is scheduled, wait for that
+thread to finish and collect its eventual report. Mark the axis `Not run` only
+when no retry remains or the user chooses to proceed without it. A fallback to
+another provider is a user decision.
+
+These rules belong **inside every reviewer prompt**:
+
+- **This thread owns its findings.** Say that the coordinator will report fixes
+  back to this same thread, and that it will then re-check its own findings
+  and judge each written disposition.
 - **Paste the smell baseline into the Standards prompt in full.** It exists
   nowhere in the repo, so a fresh agent has no other way to reach it. Everything
   else an axis needs is a path the agent can read for itself.
-- **Same brief, same word limit.** Use the axis briefs below verbatim, so two
-  reports are interchangeable in the aggregate whoever wrote them.
+- **Same briefs, same word limit.** A combined reviewer receives both briefs and
+  returns separate sections. Independent reviewers receive one brief each.
 
 **Standards prompt** should include:
 
@@ -150,13 +148,15 @@ End with `## Summary`: total findings per axis, and the worst issue _within each
 axis_. Report each axis on its own terms rather than picking one winner across
 them.
 
-### 6. Assemble the record
+### 6. Keep or record the result
 
-Write the aggregate to a file under `$BB_THREAD_STORAGE`, headed by a block
-carrying repo path and `origin` URL, task key, fixed point as given and its
-resolved SHA, `HEAD` SHA, the commit list, the reviewer model, and the timestamp.
+Keep a clean report in the coordinator thread for narrative review. Persist a
+`review_result` only when findings remain unresolved, an audit requires a
+durable result, or the user requested one. When persisted, write the aggregate
+under `$BB_THREAD_STORAGE` with repo, origin, task, refs, commits, reviewer model
+and timestamp.
 
-### 7. Verdict and counts
+### 7. Verdict and counts for a durable result
 
 A metadata file carrying `verdict` and `findingCounts`, and nothing else — the
 schema is strict.
@@ -174,7 +174,7 @@ verdict:
 3. Every count above `0` — `fail`.
 4. Otherwise — `mixed`.
 
-### 8. Write the artifact
+### 8. Write a durable result when required
 
 ```sh
 bb tasks-plus artifact add <KEY> --kind review_result \
@@ -185,10 +185,19 @@ bb tasks-plus artifact add <KEY> --kind review_result \
 Report the review as recorded once the command returns `.artifact.id`. On
 failure, report the failure and the path of the retained body file.
 
-### 9. Comment as the index
+Do not add a review-progress or disposition comment. The final hand-back points
+to a durable result when one exists.
 
-One milestone comment: verdict, per-axis counts, `<fixed-point>..HEAD`, and the
-artifact id. It points at the artifact and leaves the findings in it.
+### 9. Close the findings
+
+Run the **review loop** from the custom instructions: fix or delegate, then
+`bb thread tell` the reviewer that raised each finding with the corrected sha,
+what changed per finding, and each unfixed finding with its reason. It answers
+with `closed`, `open`, or `regressed` per finding and a judgement on each
+disposition. Repeat in that thread until nothing is `open` without a reason.
+
+Repeat the full small/complex review only when a fix materially changes
+behaviour, architecture, security, data, or a public contract.
 
 ## Why two axes
 

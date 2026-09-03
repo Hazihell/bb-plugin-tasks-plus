@@ -42,6 +42,7 @@ afterEach(() => {
 const PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP1";
 const OTHER_PROJECT_ID = "01HZZZZZZZZZZZZZZZZZZZZZP2";
 const FOLDER_ID = "01HZZZZZZZZZZZZZZZZZZZZZF1";
+const ARTIFACT_ID = "01HZZZZZZZZZZZZZZZZZZZZZR1";
 
 const project = {
   id: PROJECT_ID,
@@ -89,6 +90,8 @@ describe("tasks route grammar", () => {
       { kind: "active" },
       { kind: "manage" },
       { kind: "task", taskKey: "TSK-4" },
+      { kind: "review", taskKey: "TSK-4", artifactId: null },
+      { kind: "review", taskKey: "TSK-4", artifactId: ARTIFACT_ID },
       { kind: "project", projectId: PROJECT_ID, view: "list" },
       { kind: "project", projectId: PROJECT_ID, view: "board" },
       // No view marker: the shell fills it from the stored preference.
@@ -104,6 +107,9 @@ describe("tasks route grammar", () => {
       view: "board",
     });
     expect(parseTasksRoute("")).toEqual({ kind: "all" });
+    // A head with no task key names nothing to open, exactly like `task`.
+    expect(parseTasksRoute("review")).toEqual({ kind: "all" });
+    expect(parseTasksRoute("task")).toEqual({ kind: "all" });
     // An unknown marker is as good as none — never a silent "list".
     expect(parseTasksRoute(`${PROJECT_ID}?view=kanban`)).toEqual({
       kind: "project",

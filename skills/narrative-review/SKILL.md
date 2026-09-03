@@ -35,6 +35,23 @@ work is outside the review; commit it or leave it out and say so.
 `environmentId` is `$BB_ENVIRONMENT_ID`, or `null` when you are outside an
 environment.
 
+### A review answering an earlier one
+
+When the task already carries a review that a human answered, the new review is
+a round, and a round covers only what the reader has not read. Use the answered
+review's `headSha` as `<base-ref>`: everything before it has already been
+judged, and describing it again asks the reader to re-approve work they approved
+last round.
+
+```sh
+BASE=$(bb tasks-plus artifact show <previous-review-id> --json \
+  | jq -r .metadata.headSha)
+```
+
+Group and write exactly as any other review — the concerns are the new
+behaviours, not a list of fixes against the feedback. Say in one opening line
+which review this answers, and leave the earlier change to the earlier review.
+
 ## 2. Read the task back
 
 ```sh
@@ -42,11 +59,9 @@ bb tasks-plus show <key> --json
 bb tasks-plus artifact list <key> --json
 ```
 
-Keep the `approved_plan`, `implementation_plan`, `decision` and `evidence`
-artifacts, and read the bodies you need with `bb tasks-plus artifact show <id>`.
-These are what the prose cites. A concern says why a change exists; the decision
-artifact is where that "why" was actually settled, and the evidence artifact is
-where the claim that it works was actually checked.
+Read only the records that shaped the final change. A task-local plan, decision
+or check result may live only in the coordinator's hand-off; a separate artifact
+exists only when another task, approval or audit needs to trust it independently.
 
 ## 3. Group by behaviour
 
@@ -72,8 +87,13 @@ a `why`.
 `risks` is what a reader should watch after this merges. Leave it empty when
 there is nothing; an empty string is honest and a manufactured risk is not.
 
-`evidence` and `decisions` hold artifact ids of this task and nothing else.
-Check every id against the list from step 2 and drop any you cannot resolve.
+`evidence` and `decisions` cite independently durable artifacts when they exist.
+Empty arrays are normal. Check every id against the list from step 2 and drop any
+you cannot resolve.
+
+`validation` records the final commands a human needs to assess: command,
+`passed` / `failed` / `not_run`, and a short summary. It replaces routine
+per-command evidence artifacts.
 
 `hunks` are the ranges a reader should actually read, not the full extent of the
 change. Verify each one against the pinned sha:
@@ -106,9 +126,9 @@ later one that says so, not edited.
 
 ## What this skill does not do
 
-It does not find defects. `/review-record` owns that, and its outcome is a
-`review_result` artifact. Narrative review describes a change that has already
-been reviewed, and it does not judge whether to merge.
+It does not find defects. `/review-record` owns that. A clean result normally
+flows straight into this narrative; a separate `review_result` is reserved for
+unresolved findings, audit requirements, or an explicit request.
 
 ## Worked example
 
@@ -119,6 +139,9 @@ Metadata for a two-concern review, as passed to `--meta-file`:
   "baseRef": "main",
   "headSha": "4f1c9ab7d2e5f60318b4c7a9d0e2f3b1a6c8d9e0",
   "environmentId": "env_zb94adftdg",
+  "validation": [
+    { "command": "pnpm test", "result": "passed", "summary": "42 tests" }
+  ],
   "concerns": [
     {
       "title": "Evaluate permissions at the request boundary",
