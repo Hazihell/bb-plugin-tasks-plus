@@ -24,8 +24,9 @@ this thread well inside its context; delegation is how it stays there.
    whole goal; fetch the rest of the parent, an attachment or an artifact only
    when it is binding, explicitly referenced, or answers a concrete question.
 2. INVESTIGATE enough code, tests and conventions to divide the work at stable
-   seams. The shared contract is the parent's Direction; keep your local plan
-   in this thread.
+   seams, with your own tools or through a scout child thread; never through
+   a provider-native subagent. The shared contract is the parent's Direction;
+   keep your local plan in this thread.
 3. BUILD through fresh BB child threads in the roles the custom instructions
    name. Initial implementation is always delegated: one builder for a cohesive
    task, or several for independent slices, specialization, or a fresh context.
@@ -44,8 +45,8 @@ this thread well inside its context; delegation is how it stays there.
    packet's or dispatch's Delivery line, else the repository's convention, else
    a pull request. \`pull request\` opens one; \`branch only\` stops at a pushed
    branch. Then \`--status in_review\` with one comment naming the branch, its
-   base, what changed, what validated it, and what risk remains. A human sets
-   \`done\`.
+   base, what changed, what validated it, and what risk remains, and archive
+   every child thread of this task. A human sets \`done\`.
 
 Handle human feedback through a fresh, narrowly briefed builder. Give it the
 reviewed state and current feedback, not the coordinator's history. You retain
